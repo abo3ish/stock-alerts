@@ -4,11 +4,17 @@ use App\Services\AlertCache;
 use App\Services\AlertTriggered;
 use Illuminate\Support\Facades\Artisan;
 
-// Ctrl+C is safe: a killed batch rolls back and its rows are retried.
+// Runs in the alert-relay container (docker-compose.yml). Run exactly one: two relays can race on an alert.
+// Ctrl+C / docker stop finish the current batch first; even a hard kill is safe (the batch rolls back and is retried).
 // ponytail: polls every 200ms when idle; Postgres LISTEN/NOTIFY or CDC (Debezium) when that latency matters.
 Artisan::command('alerts:relay', function () {
+    $running = true;
+    pcntl_async_signals(true);
+    pcntl_signal(SIGTERM, function () use (&$running) { $running = false; });
+    pcntl_signal(SIGINT, function () use (&$running) { $running = false; });
+
     $this->info('Relaying alert_outbox -> Redis. Ctrl+C to stop.');
-    while (true) {
+    while ($running) {
         try {
             $applied = AlertCache::relay();
             if ($applied > 0) {
@@ -21,9 +27,11 @@ Artisan::command('alerts:relay', function () {
             sleep(1);
         }
     }
+    $this->info('Relay stopped.');
 })->purpose('Apply pending alert changes from the outbox to Redis');
 
 // Needs ext-rdkafka, which Herd's static PHP lacks: runs in the alert-consumer container (docker-compose.yml).
+// No need to start it by hand: docker compose up starts it and restarts it on failure.
 // Any error exits the process; Docker restarts it and Kafka redelivers from the last committed offset.
 Artisan::command('alerts:consume-triggered', function () {
     $conf = new RdKafka\Conf;

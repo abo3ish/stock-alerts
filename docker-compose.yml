@@ -1,4 +1,25 @@
 # Herd already uses 5432/6379, so host ports are shifted.
+
+x-laravel-worker: &laravel-worker
+  build: ./alert-api/docker/worker
+  volumes:
+    - ./alert-api:/app
+  # Real env vars win over alert-api/.env, so the same code reaches services by their Docker names.
+  environment:
+    KAFKA_BROKERS: redpanda:9092
+    DB_HOST: postgres
+    DB_PORT: 5432
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+  depends_on:
+    redpanda:
+      condition: service_healthy
+    postgres:
+      condition: service_started
+    redis:
+      condition: service_started
+  restart: unless-stopped
+
 services:
   redpanda:
     image: redpandadata/redpanda:v24.2.7
@@ -45,26 +66,15 @@ services:
     volumes:
       - postgres:/var/lib/postgresql/data
 
-  # Laravel's alert-triggered consumer. Runs in Docker only because it needs ext-rdkafka.
+  # alert-api's long-running workers: same image, same mounted code, one process each.
+  # Docker is their supervisor: started by `docker compose up`, restarted when they crash.
   alert-consumer:
-    build: ./alert-api/docker/consumer
-    volumes:
-      - ./alert-api:/app
-    # Real env vars win over alert-api/.env, so the same code reaches services by their Docker names.
-    environment:
-      KAFKA_BROKERS: redpanda:9092
-      DB_HOST: postgres
-      DB_PORT: 5432
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-    depends_on:
-      redpanda:
-        condition: service_healthy
-      postgres:
-        condition: service_started
-      redis:
-        condition: service_started
-    restart: unless-stopped
+    <<: *laravel-worker
+    command: php artisan alerts:consume-triggered # Kafka alert-triggered -> Postgres
+
+  alert-relay:
+    <<: *laravel-worker
+    command: php artisan alerts:relay # Postgres outbox -> Redis. Exactly one replica: never scale it.
 
 volumes:
   redpanda:
