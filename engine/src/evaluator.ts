@@ -21,18 +21,22 @@ await Promise.all([producer.connect(), consumer.connect()]);
 // Not fromBeginning: a brand-new group starts at the latest tick; old prices are worthless.
 await consumer.subscribe({ topic: PRICES_TOPIC });
 
-const stats = { ticks: 0, checked: 0, fired: 0, lagSum: 0, lagMax: 0 };
+const fresh = () => ({ ticks: 0, checked: 0, fired: 0, lagSum: 0, lagMax: 0, busyMs: 0, slowestMs: 0, slowestSymbol: '' });
+let stats = fresh();
 setInterval(() => {
   if (stats.ticks === 0) return;
+  // busy = share of the second spent evaluating; near 100% means this consumer is saturated.
   console.log(
     `${stats.ticks} ticks/s | ${stats.checked} alerts checked | ${stats.fired} fired | ` +
-      `lag avg ${Math.round(stats.lagSum / stats.ticks)}ms max ${stats.lagMax}ms`,
+      `lag avg ${Math.round(stats.lagSum / stats.ticks)}ms max ${stats.lagMax}ms | ` +
+      `busy ${Math.round(stats.busyMs / 10)}% | slowest tick ${Math.round(stats.slowestMs)}ms (${stats.slowestSymbol})`,
   );
-  Object.assign(stats, { ticks: 0, checked: 0, fired: 0, lagSum: 0, lagMax: 0 });
+  stats = fresh();
 }, 1000);
 
 await consumer.run({
   eachMessage: async ({ message }) => {
+    const started = performance.now();
     const tick: Tick = JSON.parse(message.value!.toString());
 
     // ponytail: HGETALL loads every alert of the symbol on every tick: O(alerts per symbol).
@@ -62,6 +66,13 @@ await consumer.run({
         })),
       });
       await redis.hdel(alertsKey(tick.symbol), ...fired.map((alert) => alert.id));
+    }
+
+    const tookMs = performance.now() - started;
+    stats.busyMs += tookMs;
+    if (tookMs > stats.slowestMs) {
+      stats.slowestMs = tookMs;
+      stats.slowestSymbol = tick.symbol;
     }
 
     // Lag = now minus when the price was produced. The requirement is < 1s end to end.
