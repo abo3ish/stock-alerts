@@ -3,12 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "simulator": "node --experimental-strip-types --env-file=.env src/simulator.ts",
-    "evaluator": "node --experimental-strip-types --env-file=.env src/evaluator.ts",
-    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\""
+    "simulator": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=TimeoutNegativeWarning --env-file=.env src/simulator.ts",
+    "evaluator": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=TimeoutNegativeWarning --env-file=.env src/evaluator.ts",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=TimeoutNegativeWarning --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "ioredis": "^5.4.1",
     "kafkajs": "^2.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5"
   }
 }

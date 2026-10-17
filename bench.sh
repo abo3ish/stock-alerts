@@ -7,9 +7,14 @@ cd "$(dirname "$0")"
 DURATION=${1:-30}
 TPS=${2:-2000}
 LOG=$(mktemp -d)
+if [ -t 1 ]; then export FORCE_COLOR=1; fi # keep colors when printing to a terminal
 
 stop() { pkill -INT -f 'src/simulator.ts' || true; pkill -INT -f 'src/evaluator.ts' || true; }
 trap stop EXIT
+
+# Start every run at the end of the topic: otherwise the evaluator first chews through ticks
+# left over from earlier runs (hours old) and the numbers measure that backlog, not this run.
+docker compose exec -T redpanda rpk group seek evaluator --to end >/dev/null
 
 (cd engine && npm run evaluator >"$LOG/eval.log" 2>&1) &
 until grep -q 'joined the group' "$LOG/eval.log"; do sleep 0.5; done
