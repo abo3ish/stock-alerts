@@ -1,0 +1,9 @@
+{
+  // Open this file in Cursor (File > Open Workspace from File...).
+  // Each service is its own root, so tools like the Pest test explorer run from alert-api/, not the repo root.
+  "folders": [
+    { "path": "alert-api", "name": "alert-api (Laravel)" },
+    { "path": "engine", "name": "engine (Node)" },
+    { "path": ".", "name": "stock-alerts (infra)" }
+  ]
+}

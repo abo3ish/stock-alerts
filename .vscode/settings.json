@@ -1,0 +1,6 @@
+{
+  // Lets the PHPUnit/Pest test explorer work when Cursor opens the repo root.
+  // The extension runs tests from the folder holding this phpunit.xml (so cwd = alert-api, vendor/bin/pest resolves).
+  // Absolute path on purpose: the extension's README warns ${workspaceFolder} can fail to resolve on macOS.
+  "phpunit.args": ["--configuration=/Users/abo3ish/Herd/stock-alerts/alert-api/phpunit.xml"]
+}
