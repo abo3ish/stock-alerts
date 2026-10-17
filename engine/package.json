@@ -1,0 +1,11 @@
+{
+  "name": "engine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "simulator": "node --experimental-strip-types --env-file=.env src/simulator.ts"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4"
+  }
+}
