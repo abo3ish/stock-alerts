@@ -7,24 +7,6 @@ use App\Services\AlertCache;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Schema;
 
-const ALERT = ['user_id' => 1, 'symbol' => 'AAPL', 'condition' => 'above', 'target_price' => 200];
-
-beforeEach(function () {
-    // Guard: flushdb must only ever hit the test Redis DB, never dev data in DB 0.
-    expect((string) config('database.redis.default.database'))->toBe('1');
-    Redis::flushdb();
-});
-
-function createAlert(array $overrides = []): int
-{
-    return test()->postJson('/api/alerts', [...ALERT, ...$overrides])->assertCreated()->json('id');
-}
-
-function cachedAlerts(string $symbol = 'AAPL'): array
-{
-    return array_map(fn($json) => json_decode($json, true), Redis::hgetall(AlertCache::key($symbol)));
-}
-
 function setRedisPort(int|string $port): void
 {
     config(['database.redis.default.port' => $port]);

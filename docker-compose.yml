@@ -45,6 +45,27 @@ services:
     volumes:
       - postgres:/var/lib/postgresql/data
 
+  # Laravel's alert-triggered consumer. Runs in Docker only because it needs ext-rdkafka.
+  alert-consumer:
+    build: ./alert-api/docker/consumer
+    volumes:
+      - ./alert-api:/app
+    # Real env vars win over alert-api/.env, so the same code reaches services by their Docker names.
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   redpanda:
   redis:
