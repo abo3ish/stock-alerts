@@ -25,12 +25,22 @@ const logCreator = () => ({ level, log }: LogEntry) => {
 export const createKafka = (clientId: string) => new Kafka({ clientId, brokers: kafkaConfig().brokers, logCreator });
 
 // Create only if missing: createTopics on an existing topic makes kafkajs log a harmless but alarming ERROR.
+// An existing topic with a different partition count is reported, not changed: fewer partitions caps how many
+// consumers can share the work, and fixing it moves keys between partitions, so a human should decide.
 export async function ensureTopic(kafka: Kafka, topic: string, numPartitions: number) {
   const admin = kafka.admin();
   await admin.connect();
   try {
     if (!(await admin.listTopics()).includes(topic)) {
       await admin.createTopics({ topics: [{ topic, numPartitions }] });
+      return;
+    }
+    const [meta] = (await admin.fetchTopicMetadata({ topics: [topic] })).topics;
+    if (meta.partitions.length !== numPartitions) {
+      kafkaLog.warn(
+        `${topic} has ${meta.partitions.length} partitions, expected ${numPartitions}. ` +
+          `Fix: rpk topic add-partitions ${topic} --num ${numPartitions - meta.partitions.length}`,
+      );
     }
   } finally {
     await admin.disconnect();

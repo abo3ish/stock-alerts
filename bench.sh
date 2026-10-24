@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Load test the Evaluation Engine. Usage: ./bench.sh [seconds=30] [ticks_per_sec=2000]
-# Runs evaluator + simulator, prints the evaluator's per-second stats, then the Kafka consumer lag
+# Runs evaluator + simulator, streams the evaluator's per-second stats live, then prints the Kafka consumer lag
 # (messages produced but not yet evaluated). Growing lag = the engine cannot keep up.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -9,7 +9,12 @@ TPS=${2:-2000}
 LOG=$(mktemp -d)
 if [ -t 1 ]; then export FORCE_COLOR=1; fi # keep colors when printing to a terminal
 
-stop() { pkill -INT -f 'src/simulator.ts' || true; pkill -INT -f 'src/evaluator.ts' || true; }
+TAIL_PID=
+stop() {
+  pkill -INT -f 'src/simulator.ts' || true
+  pkill -INT -f 'src/evaluator.ts' || true
+  if [ -n "$TAIL_PID" ]; then kill "$TAIL_PID" 2>/dev/null || true; fi
+}
 trap stop EXIT
 
 # Start every run at the end of the topic: otherwise the evaluator first chews through ticks
@@ -28,9 +33,14 @@ until grep -q 'joined the group' "$LOG/eval.log"; do
   sleep 0.5
 done
 
+echo "--- evaluator, ${TPS} ticks/s target, ${DURATION}s (live; Ctrl+C stops early)"
+# Stream the evaluator's log as it is written (minus npm's banner). $! is grep, the pipe's last command:
+# killing it makes tail exit on its next write.
+tail -n +1 -f "$LOG/eval.log" | grep --line-buffered -vE '^> |^$' &
+TAIL_PID=$!
+
 (cd engine && TICKS_PER_SEC=$TPS npm run simulator >"$LOG/sim.log" 2>&1) &
 sleep "$DURATION"
-
-echo "--- evaluator, ${TPS} ticks/s target, ${DURATION}s"
-grep 'ticks/s' "$LOG/eval.log"
+kill "$TAIL_PID" 2>/dev/null || true
+TAIL_PID=
 echo "--- Kafka consumer lag at the end: $(docker compose exec -T redpanda rpk group describe evaluator | awk '/^TOTAL-LAG/{print $2}') messages behind"
