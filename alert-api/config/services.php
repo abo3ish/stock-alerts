@@ -28,6 +28,12 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'kafka' => [
+        // Inside Docker the consumer reaches the broker as redpanda:9092 (set in docker-compose.yml).
+        'brokers' => env('KAFKA_BROKERS', 'localhost:19092'),
+        'triggered_topic' => env('KAFKA_TRIGGERED_TOPIC', 'alert-triggered'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

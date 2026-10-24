@@ -1,0 +1,805 @@
+<title>Stock Alert Pipeline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap">
+<style>
+  /* Layout: a wide system diagram on top (LTR, the "whiteboard"), the narrated step under it (RTL). */
+  :root {
+    --bg: #eef2f6;
+    --surface: #ffffff;
+    --ink: #142130;
+    --muted: #5a6b7d;
+    --line: #b9c5d2;
+    --grid: #dde4ec;
+    --write: #2563c9;      /* alert writes: API -> Postgres -> relay -> Redis */
+    --price: #12805c;      /* price ticks: simulator -> Kafka -> evaluator */
+    --fire: #b4237a;       /* triggered alerts */
+    --fail: #c8321e;
+    --laravel: #e0482c;
+    --node: #3c873a;
+    --pg: #336791;
+    --redis: #c92a1e;
+    --kafka: #3b3f6b;
+    --chip: #e6ecf3;
+    --font-body: "IBM Plex Sans Arabic", "Segoe UI", Tahoma, system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d141c; --surface: #16202b; --ink: #e3eaf1; --muted: #93a4b5; --line: #3a4a5a; --grid: #1c2733;
+      --write: #6aa2ff; --price: #3fc596; --fire: #f06bb8; --fail: #ff7a63;
+      --laravel: #ff7a5c; --node: #74c66f; --pg: #7fb0dc; --redis: #ff6b5e; --kafka: #a7abe6; --chip: #1f2b38;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d141c; --surface: #16202b; --ink: #e3eaf1; --muted: #93a4b5; --line: #3a4a5a; --grid: #1c2733;
+    --write: #6aa2ff; --price: #3fc596; --fire: #f06bb8; --fail: #ff7a63;
+    --laravel: #ff7a5c; --node: #74c66f; --pg: #7fb0dc; --redis: #ff6b5e; --kafka: #a7abe6; --chip: #1f2b38;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.6;
+  }
+  .wrap {
+    max-width: 1180px; margin: 0 auto;
+    padding-block: 28px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: grid; gap: 18px;
+  }
+  header { display: grid; gap: 6px; }
+  h1 { margin: 0; font-size: clamp(26px, 4vw, 38px); line-height: 1.15; letter-spacing: -0.01em; text-wrap: balance; }
+  .tagline { margin: 0; color: var(--muted); max-width: 62ch; }
+  .stack { display: flex; flex-wrap: wrap; gap: 6px; direction: ltr; justify-content: flex-end; }
+  .stack span { font-family: var(--font-mono); font-size: 12px; background: var(--chip); color: var(--muted); padding: 2px 8px; border-radius: 4px; }
+
+  /* Controls */
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    font: inherit; font-size: 14px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+    padding: 6px 12px; border-radius: 6px; line-height: 1.4;
+  }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--write); outline-offset: 2px; }
+  .tabs button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .player { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .player .primary { background: var(--write); color: #fff; border-color: var(--write); min-width: 92px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 6px 10px; font-family: var(--font-mono); font-size: 12.5px; }
+  .seg button + button { border-inline-start: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--chip); font-weight: 600; }
+  .layout-toggle { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--muted); }
+
+  /* Diagram */
+  figure.board { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .board-scroll { overflow-x: auto; direction: ltr; }
+  svg.diagram { display: block; width: 100%; min-width: 760px; height: auto; font-family: var(--font-mono); }
+  figcaption { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
+  .legend { display: inline-flex; align-items: center; gap: 6px; direction: ltr; font-family: var(--font-mono); font-size: 12px; }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  .gridbg { stroke: var(--grid); stroke-width: 1; }
+  .node rect.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; transition: stroke .25s, stroke-width .25s; }
+  .node.dashed rect.box { stroke-dasharray: 5 4; }
+  .node.active rect.box { stroke: var(--ink); stroke-width: 2.5; }
+  .node .title { fill: var(--ink); font-family: var(--font-body); font-size: 13.5px; font-weight: 600; }
+  .node .sub { fill: var(--muted); font-size: 10.5px; }
+  .badge { color: #fff; }
+  .t-laravel { fill: var(--laravel); } .t-node { fill: var(--node); } .t-pg { fill: var(--pg); }
+  .t-redis { fill: var(--redis); } .t-kafka { fill: var(--kafka); } .t-user { fill: var(--muted); }
+  .inner { fill: var(--ink); font-size: 10.5px; }
+  .inner.muted { fill: var(--muted); }
+  .inner.small { font-size: 9px; }
+  .pg-split { stroke: var(--line, currentColor); stroke-opacity: .35; stroke-dasharray: 3 3; }
+  #pg-outbox.pending { fill: var(--write); font-weight: 600; }
+  .st-active { fill: var(--price); } .st-triggered { fill: var(--fire); }
+
+  .edge { fill: none; stroke: var(--line); stroke-width: 2; transition: stroke .25s; }
+  .edge.dashed { stroke-dasharray: 6 5; }
+  .edge.active { stroke-width: 2.5; stroke-dasharray: 7 6; animation: flow 0.6s linear infinite; }
+  .edge.active.k-write { stroke: var(--write); } .edge.active.k-price { stroke: var(--price); }
+  .edge.active.k-fire { stroke: var(--fire); } .edge.active.k-relay { stroke: var(--write); } .edge.active.k-fail { stroke: var(--fail); }
+  @keyframes flow { to { stroke-dashoffset: -26; } }
+  .arrowhead { fill: var(--line); }
+  .elabel { fill: var(--muted); font-size: 10px; }
+
+  .lane { fill: var(--chip); }
+  .lane.hot { fill: var(--price); opacity: .85; }
+  .lane.hot.fire { fill: var(--fire); }
+  .lane-n { fill: var(--muted); font-size: 7.5px; }
+  .lane-key { fill: #fff; font-size: 7.5px; font-weight: 600; }
+
+  .axis { stroke: var(--line); stroke-width: 1.5; }
+  .range { fill: var(--price); opacity: .16; }
+  .range.hit { fill: var(--fire); opacity: .2; }
+  .dot { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
+  .dot.hit { fill: var(--fire); stroke: var(--fire); }
+  .dot.new { fill: var(--write); stroke: var(--write); }
+  .marker { stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 3 3; }
+  .tick { fill: var(--muted); font-size: 8px; }
+  .hashcell { fill: var(--redis); opacity: .55; }
+  .down-veil { fill: var(--surface); opacity: .82; }
+  .down-x { stroke: var(--fail); stroke-width: 3; }
+  .down-t { fill: var(--fail); font-size: 13px; font-weight: 600; }
+
+  .packet circle { stroke: var(--surface); stroke-width: 2; }
+  .packet rect { stroke-width: 1.2; fill: var(--surface); }
+  .packet text { font-size: 10.5px; font-weight: 600; }
+  .packet.k-write circle, .packet.k-relay circle { fill: var(--write); } .packet.k-write rect, .packet.k-relay rect { stroke: var(--write); } .packet.k-write text, .packet.k-relay text { fill: var(--write); }
+  .packet.k-price circle { fill: var(--price); } .packet.k-price rect { stroke: var(--price); } .packet.k-price text { fill: var(--price); }
+  .packet.k-fire circle { fill: var(--fire); } .packet.k-fire rect { stroke: var(--fire); } .packet.k-fire text { fill: var(--fire); }
+  .packet.k-fail circle { fill: var(--fail); } .packet.k-fail rect { stroke: var(--fail); } .packet.k-fail text { fill: var(--fail); }
+
+  /* Narration */
+  .narration { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 18px; align-items: start; }
+  @media (max-width: 820px) { .narration { grid-template-columns: 1fr; } }
+  .steps { margin: 0; padding: 14px 16px; list-style: none; counter-reset: s; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 2px; }
+  .steps li { counter-increment: s; }
+  .steps button {
+    width: 100%; text-align: start; border: 0; background: transparent; padding: 6px 8px; border-radius: 6px; display: flex; gap: 10px; align-items: baseline; color: var(--muted);
+  }
+  .steps button::before { content: counter(s); font-family: var(--font-mono); font-size: 12px; min-width: 1.6em; text-align: center; color: var(--muted); }
+  .steps li.done button { color: var(--ink); }
+  .steps li.current button { background: var(--chip); color: var(--ink); font-weight: 600; }
+  .steps li.current button::before { color: var(--ink); }
+  .now { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; display: grid; gap: 10px; min-width: 0; }
+  .now .eyebrow { font-size: 12.5px; color: var(--muted); letter-spacing: .02em; }
+  .now h2 { margin: 0; font-size: 21px; line-height: 1.3; text-wrap: balance; }
+  .now p { margin: 0; max-width: 64ch; }
+  .now pre {
+    margin: 0; direction: ltr; text-align: left; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; background: var(--bg);
+    border: 1px solid var(--grid); border-radius: 6px; padding: 10px 12px; overflow-x: auto; white-space: pre; color: var(--ink);
+  }
+  .metric { justify-self: start; font-family: var(--font-mono); font-size: 12.5px; direction: ltr; padding: 3px 9px; border-radius: 4px; background: var(--chip); }
+  .metric.bad { color: var(--fail); } .metric.good { color: var(--price); }
+
+  .results { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; display: grid; gap: 10px; }
+  .results h2 { margin: 0; font-size: 17px; }
+  .results p { margin: 0; color: var(--muted); font-size: 13.5px; }
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid var(--grid); text-align: start; }
+  td.num, th.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; direction: ltr; text-align: end; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  td.bad { color: var(--fail); } td.good { color: var(--price); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .edge.active { animation: none; }
+    .node rect.box, .edge { transition: none; }
+  }
+</style>
+
+<div class="wrap" dir="rtl">
+  <header>
+    <div class="stack"><span>Laravel 13</span><span>Node 23</span><span>Redpanda (Kafka API)</span><span>Redis 7</span><span>PostgreSQL 17</span></div>
+    <h1>Stock Alert Pipeline</h1>
+    <p class="tagline">إيه اللي بيحصل جوه السيستم خطوة بخطوة: من لحظة ما المستخدم يعمل تنبيه، لحد ما السعر يوصل والتنبيه يتنفذ. اختار سيناريو، ودوس تشغيل أو امشي خطوة خطوة.</p>
+  </header>
+
+  <div class="controls">
+    <div class="tabs" role="group" aria-label="السيناريو">
+      <button type="button" id="tab-create" data-scenario="create" aria-pressed="true">إنشاء تنبيه</button>
+      <button type="button" id="tab-tick" data-scenario="tick" aria-pressed="false">سعر جديد</button>
+      <button type="button" id="tab-fire" data-scenario="fire" aria-pressed="false">التنبيه بيتنفذ</button>
+      <button type="button" id="tab-outage" data-scenario="outage" aria-pressed="false">Redis واقع</button>
+    </div>
+    <div class="player">
+      <button type="button" id="btn-play" class="primary">تشغيل</button>
+      <button type="button" id="btn-step">الخطوة الجاية</button>
+      <button type="button" id="btn-restart">من الأول</button>
+      <div class="seg" role="group" aria-label="السرعة" dir="ltr">
+        <button type="button" id="speed-05" data-speed="0.5" aria-pressed="false">0.5×</button>
+        <button type="button" id="speed-1" data-speed="1" aria-pressed="true">1×</button>
+        <button type="button" id="speed-2" data-speed="2" aria-pressed="false">2×</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout-toggle">
+    <span>شكل الكاش في Redis:</span>
+    <div class="seg" role="group" aria-label="شكل الكاش" dir="ltr">
+      <button type="button" id="layout-zset" data-layout="zset" aria-pressed="true">Sorted Sets (now)</button>
+      <button type="button" id="layout-hash" data-layout="hash" aria-pressed="false">Hash (before)</button>
+    </div>
+  </div>
+
+  <figure class="board">
+    <div class="board-scroll">
+      <svg class="diagram" id="diagram" viewBox="0 0 1080 600" role="img"
+           aria-label="Stock alert pipeline: the Alert API writes alerts and an outbox row to Postgres in one transaction; a relay copies them into Redis sorted sets. A simulator produces prices to Kafka keyed by symbol; the evaluator range-queries Redis per tick, publishes matches to alert-triggered, and a Laravel consumer marks them triggered in Postgres.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="arrowhead"></path>
+          </marker>
+          <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2"></rect><line x1="11" y1="18" x2="13" y2="18"></line></symbol><symbol id="i-api" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8,7 3,12 8,17"></polyline><polyline points="16,7 21,12 16,17"></polyline><line x1="14" y1="4.5" x2="10" y2="19.5"></line></symbol><symbol id="i-database" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="7" ry="2.5"></ellipse><path d="M5 5 V19 C5 20.4 8.1 21.5 12 21.5 S19 20.4 19 19 V5"></path><path d="M5 12 C5 13.4 8.1 14.5 12 14.5 S19 13.4 19 12"></path></symbol><symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10 A7.5 7.5 0 0 1 18 6.5"></path><polyline points="19,2.5 19,7.5 14,7.5"></polyline><path d="M19.5 14 A7.5 7.5 0 0 1 6 17.5"></path><polyline points="5,21.5 5,16.5 10,16.5"></polyline></symbol><symbol id="i-inbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13 H8 L9.5 16 H14.5 L16 13 H21"></path><path d="M3 13 V19 A1 1 0 0 0 4 20 H20 A1 1 0 0 0 21 19 V13 L18 5 H6 Z"></path><line x1="12" y1="2.5" x2="12" y2="10"></line><polyline points="9,7.5 12,10.5 15,7.5"></polyline></symbol><symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16.5 V11 A6 6 0 0 1 18 11 V16.5 L19.5 18.5 H4.5 Z"></path><path d="M10 21 A2 2 0 0 0 14 21"></path></symbol><symbol id="i-stream" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="15" y2="6"></line><line x1="3" y1="12" x2="19" y2="12"></line><line x1="3" y1="18" x2="12" y2="18"></line><polyline points="16,8.5 19.5,12 16,15.5"></polyline></symbol><symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,16 8,10.5 12,13.5 16.5,6.5 21,9.5"></polyline><line x1="3" y1="21" x2="21" y2="21"></line></symbol><symbol id="i-funnel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5 H21 L14 12.5 V19 L10 21 V12.5 Z"></path></symbol><symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 L4.5 13.5 H11 L10 22 L19.5 10.5 H13 Z"></path></symbol>
+          <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="1" class="gridbg"></circle>
+          </pattern>
+        </defs>
+        <rect x="0" y="0" width="1080" height="600" fill="url(#dots)"></rect>
+
+        <!-- edges -->
+        <g id="edges">
+          <path id="e_client_api" class="edge" d="M160 95 H238" marker-end="url(#arrow)"></path>
+          <path id="e_api_pg" class="edge" d="M400 95 H518" marker-end="url(#arrow)"></path>
+          <path id="e_pg_relay" class="edge" d="M720 95 H818" marker-end="url(#arrow)"></path>
+          <path id="e_relay_redis" class="edge" d="M905 130 V298" marker-end="url(#arrow)"></path>
+          <path id="e_sim_kafka" class="edge" d="M160 475 H238" marker-end="url(#arrow)"></path>
+          <path id="e_kafka_eval" class="edge" d="M490 455 H568" marker-end="url(#arrow)"></path>
+          <path id="e_eval_redis" class="edge" d="M740 450 H798" marker-end="url(#arrow)"></path>
+          <path id="e_eval_trig" class="edge" d="M655 410 V350 H492" marker-end="url(#arrow)"></path>
+          <path id="e_trig_consumer" class="edge" d="M365 290 V252" marker-end="url(#arrow)"></path>
+          <path id="e_consumer_pg" class="edge" d="M480 220 H620 V176" marker-end="url(#arrow)"></path>
+          <path id="e_trig_notif" class="edge dashed" d="M240 340 H162" marker-end="url(#arrow)"></path>
+        </g>
+        <g id="edge-labels">
+          <text class="elabel" x="199" y="86" text-anchor="middle">HTTP</text>
+          <text class="elabel" x="459" y="86" text-anchor="middle">1 transaction</text>
+          <text class="elabel" x="769" y="86" text-anchor="middle">poll 200ms</text>
+          <text class="elabel" x="913" y="218">write</text>
+          <text class="elabel" x="199" y="466" text-anchor="middle">produce</text>
+          <text class="elabel" x="529" y="446" text-anchor="middle">consume</text>
+          <text class="elabel" x="769" y="441" text-anchor="middle">query</text>
+          <text class="elabel" x="575" y="342" text-anchor="middle">publish</text>
+          <text class="elabel" x="373" y="275">consume</text>
+          <text class="elabel" x="552" y="211" text-anchor="middle">UPDATE</text>
+          <text class="elabel" x="200" y="331" text-anchor="middle">planned</text>
+        </g>
+
+        <!-- nodes -->
+        <g id="n_client" class="node">
+          <rect class="box" x="30" y="60" width="130" height="70" rx="8"></rect>
+          <g class="badge"><rect x="40" y="72" width="22" height="22" rx="4" class="t-user"></rect><use href="#i-phone" x="43" y="75" width="16" height="16"></use></g>
+          <text class="title" x="70" y="88">User app</text>
+          <text class="sub" x="40" y="116">web · mobile</text>
+        </g>
+        <g id="n_api" class="node">
+          <rect class="box" x="240" y="60" width="160" height="70" rx="8"></rect>
+          <g class="badge"><rect x="250" y="72" width="22" height="22" rx="4" class="t-laravel"></rect><use href="#i-api" x="253" y="75" width="16" height="16"></use></g>
+          <text class="title" x="280" y="88">Alert API</text>
+          <text class="sub" x="250" y="116">api.alerts.test</text>
+        </g>
+        <g id="n_pg" class="node">
+          <rect class="box" x="520" y="40" width="200" height="134" rx="8"></rect>
+          <g class="badge"><rect x="530" y="50" width="22" height="22" rx="4" class="t-pg"></rect><use href="#i-database" x="533" y="53" width="16" height="16"></use></g>
+          <text class="title" x="560" y="66">PostgreSQL</text>
+          <text class="inner muted small" x="530" y="86">table: alerts</text>
+          <g id="pg-rows"></g>
+          <line class="pg-split" x1="530" y1="128" x2="710" y2="128"></line>
+          <text class="inner muted small" x="530" y="143">table: alert_outbox</text>
+          <text class="inner" id="pg-outbox" x="530" y="160">(empty)</text>
+        </g>
+        <g id="n_relay" class="node">
+          <rect class="box" x="820" y="60" width="170" height="70" rx="8"></rect>
+          <g class="badge"><rect x="830" y="72" width="22" height="22" rx="4" class="t-laravel"></rect><use href="#i-sync" x="833" y="75" width="16" height="16"></use></g>
+          <text class="title" x="860" y="88">Outbox relay</text>
+          <text class="sub" x="830" y="116">worker · Docker</text>
+        </g>
+        <g id="n_consumer" class="node">
+          <rect class="box" x="240" y="190" width="240" height="60" rx="8"></rect>
+          <g class="badge"><rect x="250" y="199" width="22" height="22" rx="4" class="t-laravel"></rect><use href="#i-inbox" x="253" y="202" width="16" height="16"></use></g>
+          <text class="title" x="280" y="215">alert-consumer</text>
+          <text class="sub" x="250" y="240">Docker · rdkafka · group alert-api</text>
+        </g>
+        <g id="n_notif" class="node dashed">
+          <rect class="box" x="20" y="310" width="140" height="56" rx="8"></rect>
+          <g class="badge"><rect x="28" y="318" width="22" height="22" rx="4" class="t-user"></rect><use href="#i-bell" x="31" y="321" width="16" height="16"></use></g>
+          <text class="title" x="57" y="334">Notifications</text>
+          <text class="sub" x="57" y="354">planned</text>
+        </g>
+        <g id="n_kafka" class="node">
+          <rect class="box" x="240" y="290" width="250" height="270" rx="8"></rect>
+          <g class="badge"><rect x="250" y="298" width="22" height="22" rx="4" class="t-kafka"></rect><use href="#i-stream" x="253" y="301" width="16" height="16"></use></g>
+          <text class="title" x="280" y="314">Redpanda · Kafka API</text>
+          <text class="inner muted small" x="256" y="334">alert-triggered · 3 partitions · key = alert id</text>
+          <g id="trig-lanes"></g>
+          <text class="inner muted small" x="256" y="392">stock-prices · 12 partitions · key = symbol</text>
+          <g id="price-lanes"></g>
+        </g>
+        <g id="n_sim" class="node">
+          <rect class="box" x="30" y="440" width="130" height="70" rx="8"></rect>
+          <g class="badge"><rect x="40" y="452" width="22" height="22" rx="4" class="t-node"></rect><use href="#i-chart" x="43" y="455" width="16" height="16"></use></g>
+          <text class="title" x="70" y="468">Simulator</text>
+          <text class="sub" x="40" y="496">2,000 ticks/s</text>
+        </g>
+        <g id="n_eval" class="node">
+          <rect class="box" x="570" y="410" width="170" height="80" rx="8"></rect>
+          <g class="badge"><rect x="580" y="422" width="22" height="22" rx="4" class="t-node"></rect><use href="#i-funnel" x="583" y="425" width="16" height="16"></use></g>
+          <text class="title" x="610" y="438">Evaluator</text>
+          <text class="sub" x="580" y="462">group evaluator</text>
+          <text class="sub" id="eval-metric" x="580" y="478"></text>
+        </g>
+        <g id="n_redis" class="node">
+          <rect class="box" x="800" y="300" width="250" height="180" rx="8"></rect>
+          <g class="badge"><rect x="810" y="308" width="22" height="22" rx="4" class="t-redis"></rect><use href="#i-bolt" x="813" y="311" width="16" height="16"></use></g>
+          <text class="title" x="850" y="324">Redis</text>
+          <g id="redis-content"></g>
+        </g>
+
+        <!-- moving packet -->
+        <g id="packet" class="packet k-write" visibility="hidden">
+          <rect id="packet-pill" x="0" y="0" width="10" height="20" rx="10"></rect>
+          <text id="packet-text" x="0" y="0" text-anchor="middle"></text>
+          <circle r="6" cx="0" cy="0"></circle>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span>كل لون = نوع رحلة:</span>
+      <span class="legend"><i style="background: var(--write)"></i>alert writes</span>
+      <span class="legend"><i style="background: var(--price)"></i>price ticks</span>
+      <span class="legend"><i style="background: var(--fire)"></i>triggered alert</span>
+      <span class="legend"><i style="background: var(--fail)"></i>failure</span>
+    </figcaption>
+  </figure>
+
+  <section class="narration" aria-label="الخطوات">
+    <ol class="steps" id="steps"></ol>
+    <div class="now" aria-live="polite">
+      <div class="eyebrow" id="now-eyebrow"></div>
+      <h2 id="now-title"></h2>
+      <p id="now-text"></p>
+      <pre id="now-code"></pre>
+      <span class="metric" id="now-metric" hidden></span>
+    </div>
+  </section>
+
+  <section class="results">
+    <h2>قبل وبعد الـ Sorted Sets</h2>
+    <p>من <code dir="ltr">./bench.sh 60 2000</code> على نفس المليون تنبيه (AAPL عليه 100,001). الأرقام من القياس الفعلي.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th></th><th class="num">Hash (before)</th><th class="num">Sorted Sets (now)</th></tr></thead>
+        <tbody>
+          <tr><td>الأسعار اللي اتعالجت في الثانية</td><td class="num bad">1,679</td><td class="num good">1,998</td></tr>
+          <tr><td>التنبيهات اللي اتفحصت في الثانية</td><td class="num bad">336,265</td><td class="num good">0</td></tr>
+          <tr><td>الـ evaluator مشغول</td><td class="num bad">99%</td><td class="num good">50%</td></tr>
+          <tr><td>الـ lag في آخر ثانية</td><td class="num bad">10.5 s</td><td class="num good">31 ms</td></tr>
+          <tr><td>أقصى lag في الـ 60 ثانية</td><td class="num bad">18.4 s</td><td class="num good">171 ms</td></tr>
+          <tr><td>رسايل متأخرة في Kafka في الآخر</td><td class="num bad">24,960</td><td class="num good">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, attrs = {}, text) => {
+    const n = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+
+  // ---------- state ----------
+  const AAPL_P = 9;      // kafkajs default (murmur2) partitioner: key "AAPL" -> partition 9 of 12
+  const TRIG_P = 1;      // key "42" -> partition 1 of 3
+  const baseAlerts = () => [{ id: 41, sym: 'AAPL', cond: 'above', target: 205, status: 'active' }];
+  const seeds = {
+    create: () => ({ alerts: baseAlerts(), outbox: 0, above: [205, 220], below: [160, 170], data: 4 }),
+    tick: () => ({ alerts: baseAlerts(), outbox: 0, above: [205, 220], below: [160, 170], data: 4 }),
+    fire: () => ({ alerts: [...baseAlerts(), { id: 42, sym: 'AAPL', cond: 'above', target: 190, status: 'active' }], outbox: 0, above: [190, 205, 220], below: [160, 170], data: 5 }),
+    outage: () => ({ alerts: [...baseAlerts(), { id: 42, sym: 'AAPL', cond: 'above', target: 190, status: 'active' }], outbox: 0, above: [190, 205, 220], below: [160, 170], data: 5 }),
+  };
+  let state;
+  const fresh = (scenario) => ({ ...seeds[scenario](), price: null, lane: null, trigLane: null, redisDown: false, flash: null, removed: null, retries: 0 });
+
+  // ---------- scenarios ----------
+  // Each step: edge to travel (or null), packet label, kind (color), narration, code, and the state change it causes.
+  let layout = 'zset';
+  const hash = () => layout === 'hash';
+
+  const queryStep = (price) => hash()
+    ? { edge: 'e_eval_redis', kind: 'price', label: 'HGETALL alerts:AAPL', title: 'هات كل حاجة', dur: 1.2,
+        text: 'الطريقة القديمة: بيطلب كل تنبيهات AAPL (100,001 تنبيه) عشان يفلترهم بنفسه في Node.',
+        code: 'HGETALL alerts:AAPL', nodes: ['n_eval', 'n_redis'], apply: (s) => { s.price = price; } }
+    : { edge: 'e_eval_redis', kind: 'price', label: 'ZRANGEBYSCORE ×2', title: 'السؤال الصح',
+        text: `بيسأل Redis: مين من تنبيهات above هدفه أقل من أو يساوي ${price.toFixed(2)}؟ ومين من below هدفه أكبر من أو يساوي ${price.toFixed(2)}؟ الـ sorted set مترتب بالسعر، فـ Redis بيروح للنطاق على طول من غير ما يلف على الكل.`,
+        code: `ZRANGEBYSCORE alerts:above:AAPL -inf ${price.toFixed(2)}\nZRANGEBYSCORE alerts:below:AAPL ${price.toFixed(2)} +inf`,
+        nodes: ['n_eval', 'n_redis'], apply: (s) => { s.price = price; } };
+
+  const scenarios = {
+    create: {
+      name: 'إنشاء تنبيه',
+      steps: () => [
+        { edge: 'e_client_api', kind: 'write', label: 'POST /api/alerts', title: 'المستخدم بيعمل تنبيه',
+          text: 'المستخدم عايز يتنبّه لو AAPL عدّى 190. الطلب بيروح للـ Alert API (Laravel على Herd).',
+          code: 'POST /api/alerts\n{"user_id":7,"symbol":"AAPL","condition":"above","target_price":190}', nodes: ['n_client', 'n_api'] },
+        { edge: 'e_api_pg', kind: 'write', label: 'BEGIN · 2× INSERT · COMMIT', title: 'Transaction واحدة',
+          text: 'التنبيه وملاحظة الـ outbox ("تنبيه 42 اتغير") بيتكتبوا في نفس الـ transaction. يا الاتنين يتسجلوا، يا ولا واحد.',
+          code: "BEGIN;\nINSERT INTO alerts (user_id, symbol, condition, target_price) VALUES (7, 'AAPL', 'above', 190);\nINSERT INTO alert_outbox (alert_id, symbol) VALUES (42, 'AAPL');\nCOMMIT;",
+          nodes: ['n_api', 'n_pg'], apply: (s) => { s.alerts.push({ id: 42, sym: 'AAPL', cond: 'above', target: 190, status: 'active' }); s.outbox = 1; } },
+        { edge: 'e_client_api', reverse: true, kind: 'write', label: '201 Created', title: 'الرد من غير Redis',
+          text: 'الـ API رد على المستخدم. مافيش ولا كلمة عن Redis في الطلب ده، فلو Redis واقع، المستخدم مش هيحس بحاجة.',
+          code: 'HTTP/1.1 201 Created\n{"id":42,"symbol":"AAPL","status":"active"}', nodes: ['n_client', 'n_api'] },
+        { edge: 'e_pg_relay', kind: 'relay', label: 'SELECT … SKIP LOCKED', title: 'الـ relay بيلاقي الملاحظة',
+          text: 'الـ relay (worker في Docker) بيبص على الـ outbox كل 200ms، وبيقفل الصفوف اللي هيشتغل عليها عشان مافيش حد تاني ياخدها.',
+          code: 'SELECT * FROM alert_outbox ORDER BY id LIMIT 500\nFOR UPDATE SKIP LOCKED;', nodes: ['n_pg', 'n_relay'] },
+        { edge: 'e_relay_redis', kind: 'relay', label: 'HSET data · ZADD above', title: 'الكتابة في Redis',
+          text: 'الداتا الأول، وبعدين الـ index. كده الـ evaluator عمره ما هيلاقي id من غير تفاصيله. ولاحظ إن 190 دخلت مكانها في الـ sorted set المترتب.',
+          code: 'HSET alerts:data:AAPL 42 \'{"user_id":7,"target_price":190,"condition":"above"}\'\nZADD alerts:above:AAPL 190 42',
+          nodes: ['n_relay', 'n_redis'], apply: (s) => { s.above.push(190); s.data++; s.flash = 190; } },
+        { edge: 'e_pg_relay', reverse: true, kind: 'relay', label: 'DELETE outbox row · COMMIT', title: 'مسح الملاحظة',
+          text: 'الملاحظة بتتمسح بس بعد ما Redis ينجح. لو الـ relay وقع قبل كده، هيعيدها، والإعادة آمنة لأن الكتابة idempotent: نفس النتيجة لو اتعملت مرتين.',
+          code: 'DELETE FROM alert_outbox WHERE id IN (...);\nCOMMIT;', nodes: ['n_pg', 'n_relay'], apply: (s) => { s.outbox = 0; s.flash = null; } },
+      ],
+    },
+    tick: {
+      name: 'سعر جديد',
+      steps: () => [
+        { edge: 'e_sim_kafka', kind: 'price', label: 'AAPL 187.40', title: 'سعر جديد',
+          text: `الـ simulator بيبعت السعر بـ key = AAPL. Kafka بيعمل hash للـ key، فكل أسعار AAPL بتروح partition ${AAPL_P}، وبالترتيب.`,
+          code: 'producer.send({ topic: "stock-prices",\n  messages: [{ key: "AAPL", value: \'{"symbol":"AAPL","price":187.40,"ts":...}\' }] })',
+          nodes: ['n_sim', 'n_kafka'], apply: (s) => { s.lane = AAPL_P; } },
+        { edge: 'e_kafka_eval', kind: 'price', label: `consume p${AAPL_P}`, title: 'الـ evaluator بيقرا',
+          text: `الـ evaluator عضو في consumer group اسمها evaluator، وKafka مدّيله الـ partitions. بيقرا السعر من p${AAPL_P}.`,
+          code: 'consumer.run({ eachMessage: evaluate })   // groupId: "evaluator"', nodes: ['n_kafka', 'n_eval'] },
+        queryStep(187.4),
+        hash()
+          ? { edge: 'e_eval_redis', reverse: true, kind: 'fail', label: '100,001 alerts · 11.8 MB', title: '11.8MB عشان صفر', dur: 3,
+              text: 'Redis بيرجّع 11.8MB، وNode بيعمل JSON.parse لـ 100 ألف تنبيه، والنتيجة إن ولا واحد اتحقق. في الـ benchmark، الـ tick بتاع AAPL كان بياخد من 170 لـ 395ms، والـ evaluator مشبّع 99%.',
+              code: 'HGETALL → 100001 fields → JSON.parse ×100001 → filter → []', metric: ['bad', 'per tick ≈ 170–395 ms (AAPL)'], nodes: ['n_eval', 'n_redis'] }
+          : { edge: 'e_eval_redis', reverse: true, kind: 'price', label: '[ ]  [ ]', title: 'ولا تنبيه',
+              text: 'الاتنين رجعوا فاضيين، فالـ evaluator خلص. حوالي 0.3ms، ومن غير ما يلمس الـ data hash خالص. ده اللي بيحصل في أغلب الـ ticks.',
+              code: '(empty array)\n(empty array)', metric: ['good', 'per tick ≈ 0.3 ms'], nodes: ['n_eval', 'n_redis'] },
+      ],
+    },
+    fire: {
+      name: 'التنبيه بيتنفذ',
+      steps: () => [
+        { edge: 'e_sim_kafka', kind: 'price', label: 'AAPL 191.20', title: 'السعر عدّى 190',
+          text: `سعر AAPL بقى 191.20، ونزل partition ${AAPL_P} زي كل أسعار AAPL.`,
+          code: 'producer.send({ topic: "stock-prices", messages: [{ key: "AAPL", value: \'{"price":191.20}\' }] })',
+          nodes: ['n_sim', 'n_kafka'], apply: (s) => { s.lane = AAPL_P; } },
+        { edge: 'e_kafka_eval', kind: 'price', label: `consume p${AAPL_P}`, title: 'الـ evaluator بيقرا',
+          text: 'نفس الخطوة: الـ evaluator ياخد السعر من الـ partition بتاعته.', code: 'eachMessage → evaluate(tick)', nodes: ['n_kafka', 'n_eval'] },
+        queryStep(191.2),
+        hash()
+          ? { edge: 'e_eval_redis', reverse: true, kind: 'fail', label: '100,001 alerts · 11.8 MB', title: 'كل حاجة عشان واحد', dur: 3,
+              text: 'نفس الـ 11.8MB والـ 100 ألف parse، عشان يلاقي في الآخر تنبيه واحد اتحقق (42).',
+              code: 'HGETALL → 100001 fields → filter → [42]', metric: ['bad', 'per tick ≈ 170–395 ms (AAPL)'], nodes: ['n_eval', 'n_redis'], apply: (s) => { s.hit = 190; } }
+          : { edge: 'e_eval_redis', reverse: true, kind: 'fire', label: '[42] → HMGET data 42', title: 'لقى واحد',
+              text: 'تنبيه 42 هدفه 190، وده أقل من 191.20، فرجع من الـ range. ساعتها بس الـ evaluator بيجيب تفاصيله (user_id وغيره) من الـ data hash.',
+              code: 'ZRANGEBYSCORE alerts:above:AAPL -inf 191.20   →  1) "42"\nHMGET alerts:data:AAPL 42                      →  {"user_id":7,...}',
+              metric: ['good', 'per tick ≈ 0.3 ms + 1 HMGET'], nodes: ['n_eval', 'n_redis'], apply: (s) => { s.hit = 190; } },
+        { edge: 'e_eval_trig', kind: 'fire', label: 'alert-triggered #42', title: 'ينشر الأول',
+          text: 'بينشر الـ event قبل ما يمسح التنبيه. لو الـ evaluator وقع بين الخطوتين، التنبيه هيتبعت تاني (مكرر) بدل ما يضيع: at-least-once.',
+          code: `producer.send({ topic: "alert-triggered",\n  messages: [{ key: "42", value: '{"alert_id":42,"user_id":7,"price":191.20,...}' }] })   // → p${TRIG_P}`,
+          nodes: ['n_eval', 'n_kafka'], apply: (s) => { s.trigLane = TRIG_P; } },
+        { edge: 'e_eval_redis', kind: 'fire', label: 'ZREM + HDEL 42', title: 'وبعدين يمسح',
+          text: 'دلوقتي يمسحه من Redis عشان الـ tick الجاي مايبعتوش تاني. الـ index الأول، وبعدين الداتا.',
+          code: 'MULTI\nZREM alerts:above:AAPL 42\nZREM alerts:below:AAPL 42\nHDEL alerts:data:AAPL 42\nEXEC',
+          nodes: ['n_eval', 'n_redis'], apply: (s) => { s.above = s.above.filter((v) => v !== 190); s.data--; s.hit = null; s.price = null; } },
+        { edge: 'e_trig_consumer', kind: 'fire', label: 'consume (group alert-api)', title: 'Laravel بيقرا الـ event',
+          text: 'الـ consumer بتاع Laravel شغال في Docker لأنه محتاج rdkafka، وبيقرا نفس الـ event من alert-triggered.',
+          code: '$consumer->consume(1000);   // group.id = alert-api, manual commit', nodes: ['n_kafka', 'n_consumer'] },
+        { edge: 'e_consumer_pg', kind: 'fire', label: "UPDATE … status='triggered'", title: 'Postgres بيتحدث',
+          text: 'الشرط status = active هو اللي عامل الـ idempotency: لو نفس الـ event جه مرتين، المرة التانية بتغيّر صفر صفوف. ومعاه ملاحظة في الـ outbox عشان Redis يفضل مطابق.',
+          code: "UPDATE alerts SET status = 'triggered', triggered_at = ...\n WHERE id = 42 AND status = 'active';\nINSERT INTO alert_outbox (alert_id, symbol) VALUES (42, 'AAPL');",
+          nodes: ['n_consumer', 'n_pg'], apply: (s) => { s.alerts.find((a) => a.id === 42).status = 'triggered'; s.outbox = 1; } },
+        { edge: 'e_pg_relay', kind: 'relay', label: 'SELECT … SKIP LOCKED', title: 'الـ relay شاف التغيير',
+          text: 'الـ relay لقى الملاحظة الجديدة، وقرا حالة التنبيه الحالية من Postgres: triggered.', code: "SELECT * FROM alerts WHERE id IN (42);   -- status = 'triggered'", nodes: ['n_pg', 'n_relay'] },
+        { edge: 'e_relay_redis', kind: 'relay', label: 'ZREM + HDEL (no-op)', title: 'مسح تاني، ومش بيعمل حاجة',
+          text: 'التنبيه مش active، فالـ relay بيمسحه من Redis. هو أصلاً اتمسح، فالعملية مابتغيرش حاجة، وده مقصود: Redis لازم يطابق Postgres في الآخر.',
+          code: 'ZREM alerts:above:AAPL 42   → 0\nZREM alerts:below:AAPL 42   → 0\nHDEL alerts:data:AAPL 42    → 0', nodes: ['n_relay', 'n_redis'], apply: (s) => { s.outbox = 0; } },
+        { edge: 'e_trig_notif', kind: 'fire', label: 'push / email', title: 'الإشعار (لسه ماتعملش)',
+          text: 'خدمة الإشعارات هتبقى consumer group تانية على نفس الـ topic. كل group بتاخد نسخة كاملة من كل event، وكل واحدة ليها bookmark لوحدها.',
+          code: 'consumer group "notifications" → alert-triggered   // planned', nodes: ['n_kafka', 'n_notif'] },
+      ],
+    },
+    outage: {
+      name: 'Redis واقع',
+      steps: () => [
+        { edge: null, kind: 'fail', title: 'Redis وقع',
+          text: 'Redis مش بيرد خالص. خلّينا نشوف إيه اللي هيحصل لو المستخدم عدّل تنبيه دلوقتي.',
+          code: '$ docker compose stop redis', nodes: ['n_redis'], apply: (s) => { s.redisDown = true; } },
+        { edge: 'e_client_api', kind: 'write', label: 'PATCH /api/alerts/42', title: 'تعديل السعر لـ 200',
+          text: 'المستخدم غيّر هدف تنبيه 42 من 190 لـ 200.', code: 'PATCH /api/alerts/42\n{"target_price":200}', nodes: ['n_client', 'n_api'] },
+        { edge: 'e_api_pg', kind: 'write', label: 'UPDATE + outbox · COMMIT', title: 'Postgres تمام',
+          text: 'التعديل والملاحظة اتسجلوا في Postgres في transaction واحدة، زي العادي.',
+          code: "BEGIN;\nUPDATE alerts SET target_price = 200 WHERE id = 42;\nINSERT INTO alert_outbox (alert_id, symbol) VALUES (42, 'AAPL');\nCOMMIT;",
+          nodes: ['n_api', 'n_pg'], apply: (s) => { s.alerts.find((a) => a.id === 42).target = 200; s.outbox = 1; } },
+        { edge: 'e_client_api', reverse: true, kind: 'write', label: '200 OK', title: 'المستخدم مش حاسس بحاجة',
+          text: 'الـ API رد 200 عادي. Redis واقع، بس الـ API مابيكلمهوش أصلاً.', code: 'HTTP/1.1 200 OK', nodes: ['n_client', 'n_api'] },
+        { edge: 'e_pg_relay', kind: 'relay', label: 'SELECT … SKIP LOCKED', title: 'الـ relay بيحاول',
+          text: 'الـ relay لقى الملاحظة وبيحاول يوصّلها.', code: 'SELECT * FROM alert_outbox ... FOR UPDATE SKIP LOCKED;', nodes: ['n_pg', 'n_relay'] },
+        { edge: 'e_relay_redis', fail: true, kind: 'fail', label: 'Connection refused', title: 'فشل، والملاحظة فضلت',
+          text: 'Redis مابيردش، فالكود بيرمي exception، والـ transaction بتعمل rollback، والملاحظة بتفضل في الـ outbox. الـ relay هيحاول تاني بعد ثانية.',
+          code: 'RedisException: Connection refused\nROLLBACK;   -- the outbox row stays', nodes: ['n_relay', 'n_redis'], apply: (s) => { s.retries = 1; } },
+        { edge: 'e_relay_redis', fail: true, kind: 'fail', label: 'retry · refused', title: 'محاولة تانية',
+          text: 'نفس الحكاية كل ثانية. ولا حاجة بتضيع، التغيير مستني في Postgres.', code: 'Relay failed, retrying in 1s: Connection refused', nodes: ['n_relay', 'n_redis'], apply: (s) => { s.retries = 2; } },
+        { edge: null, kind: 'price', title: 'Redis رجع',
+          text: 'Redis رجع يشتغل. لاحظ إن جواه لسه السعر القديم (190)، لأن التعديل ماوصلوش.', code: '$ docker compose start redis', nodes: ['n_redis'], apply: (s) => { s.redisDown = false; } },
+        { edge: 'e_relay_redis', kind: 'relay', label: 'HSET · ZADD above 200', title: 'التغيير وصل',
+          text: 'أول محاولة بعد ما رجع نجحت. 42 اتنقل من 190 لـ 200 في الـ sorted set.',
+          code: 'HSET alerts:data:AAPL 42 \'{"user_id":7,"target_price":200,...}\'\nZADD alerts:above:AAPL 200 42',
+          nodes: ['n_relay', 'n_redis'], apply: (s) => { s.above = s.above.filter((v) => v !== 190).concat(200); s.flash = 200; } },
+        { edge: 'e_pg_relay', reverse: true, kind: 'relay', label: 'DELETE outbox row · COMMIT', title: 'ولا تغيير ضاع',
+          text: 'الملاحظة اتمسحت، وPostgres وRedis متطابقين تاني. ده كل الهدف من الـ Outbox Pattern.',
+          code: 'DELETE FROM alert_outbox WHERE id IN (...);\nCOMMIT;', nodes: ['n_pg', 'n_relay'], apply: (s) => { s.outbox = 0; s.flash = null; } },
+      ],
+    },
+  };
+
+  // ---------- rendering ----------
+  const X0 = 832, X1 = 1030, P0 = 150, P1 = 230;
+  const px = (price) => X0 + ((Math.min(Math.max(price, P0), P1) - P0) / (P1 - P0)) * (X1 - X0);
+
+  function drawLanes() {
+    const trig = $('trig-lanes'), price = $('price-lanes');
+    trig.replaceChildren(); price.replaceChildren();
+    for (let i = 0; i < 3; i++) {
+      const y = 342 + i * 11;
+      trig.append(el('text', { class: 'lane-n', x: 256, y: y + 7 }, 'p' + i));
+      trig.append(el('rect', { class: 'lane' + (state.trigLane === i ? ' hot fire' : ''), x: 270, y, width: 204, height: 8, rx: 2 }));
+      if (state.trigLane === i) trig.append(el('text', { class: 'lane-key', x: 466, y: y + 6.6, 'text-anchor': 'end' }, '#42'));
+    }
+    for (let i = 0; i < 12; i++) {
+      const y = 400 + i * 12.5;
+      price.append(el('text', { class: 'lane-n', x: 256, y: y + 7 }, 'p' + i));
+      price.append(el('rect', { class: 'lane' + (state.lane === i ? ' hot' : ''), x: 270, y, width: 204, height: 8.5, rx: 2 }));
+      if (state.lane === i) price.append(el('text', { class: 'lane-key', x: 466, y: y + 7, 'text-anchor': 'end' }, 'AAPL'));
+    }
+  }
+
+  function drawPostgres() {
+    const g = $('pg-rows');
+    g.replaceChildren();
+    state.alerts.slice(-2).forEach((a, i) => {
+      const y = 102 + i * 15;
+      const t = el('text', { class: 'inner', x: 530, y });
+      t.append(el('tspan', {}, `#${a.id} ${a.sym} ${a.cond === 'above' ? '↑' : '↓'}${a.target} `));
+      t.append(el('tspan', { class: 'st-' + a.status }, a.status));
+      g.append(t);
+    });
+    const ob = $('pg-outbox');
+    ob.textContent = state.outbox ? '#42 AAPL  ← sync me' : '(empty)';
+    ob.classList.toggle('pending', state.outbox > 0);
+    ob.classList.toggle('muted', !state.outbox);
+  }
+
+  function drawRedis() {
+    const g = $('redis-content');
+    g.replaceChildren();
+    if (hash()) {
+      g.append(el('text', { class: 'inner', x: 812, y: 350 }, 'alerts:AAPL · HASH'));
+      g.append(el('text', { class: 'inner muted', x: 812, y: 368 }, '100,001 fields · 11.8 MB'));
+      for (let r = 0; r < 6; r++) for (let c = 0; c < 18; c++) {
+        g.append(el('rect', { class: 'hashcell', x: 812 + c * 12.5, y: 380 + r * 12, width: 9.5, height: 8.5, rx: 1.5 }));
+      }
+      g.append(el('text', { class: 'inner muted small', x: 812, y: 470 }, 'no order: every tick loads all of them'));
+    } else {
+      const rows = [
+        { key: 'alerts:above:AAPL · ZSET', y: 356, values: state.above, inRange: (v) => state.price !== null && v <= state.price, from: P0, to: state.price },
+        { key: 'alerts:below:AAPL · ZSET', y: 404, values: state.below, inRange: (v) => state.price !== null && v >= state.price, from: state.price, to: P1 },
+      ];
+      for (const row of rows) {
+        g.append(el('text', { class: 'inner', x: 812, y: row.y - 12 }, row.key));
+        if (state.price !== null) {
+          const hit = row.values.some(row.inRange);
+          g.append(el('rect', { class: 'range' + (hit ? ' hit' : ''), x: px(row.from), y: row.y - 7, width: Math.max(0, px(row.to) - px(row.from)), height: 14, rx: 3 }));
+        }
+        g.append(el('line', { class: 'axis', x1: X0, y1: row.y, x2: X1, y2: row.y }));
+        for (const v of row.values) {
+          const cls = 'dot' + (row.inRange(v) || state.hit === v ? ' hit' : '') + (state.flash === v ? ' new' : '');
+          g.append(el('circle', { class: cls, cx: px(v), cy: row.y, r: 4.5 }));
+        }
+      }
+      for (const t of [150, 170, 190, 210, 230]) g.append(el('text', { class: 'tick', x: px(t), y: 422, 'text-anchor': 'middle' }, t));
+      if (state.price !== null) {
+        const x = px(state.price);
+        g.append(el('line', { class: 'marker', x1: x, y1: 340, x2: x, y2: 412 }));
+        g.append(el('text', { class: 'inner', x: x + 4, y: 382 }, state.price.toFixed(2)));
+      }
+      g.append(el('text', { class: 'inner', x: 812, y: 448 }, 'alerts:data:AAPL · HASH'));
+      g.append(el('text', { class: 'inner muted', x: 812, y: 466 }, `${state.data} fields · id → {"user_id",...}`));
+    }
+    if (state.redisDown) {
+      g.append(el('rect', { class: 'down-veil', x: 801, y: 334, width: 248, height: 145 }));
+      g.append(el('line', { class: 'down-x', x1: 905, y1: 380, x2: 945, y2: 420 }));
+      g.append(el('line', { class: 'down-x', x1: 945, y1: 380, x2: 905, y2: 420 }));
+      g.append(el('text', { class: 'down-t', x: 925, y: 446, 'text-anchor': 'middle' }, state.retries ? `DOWN · relay retries: ${state.retries}` : 'DOWN'));
+    }
+  }
+
+  function render() { drawLanes(); drawPostgres(); drawRedis(); }
+
+  function highlight(step) {
+    document.querySelectorAll('.node.active').forEach((n) => n.classList.remove('active'));
+    document.querySelectorAll('.edge').forEach((e) => e.classList.remove('active', 'k-write', 'k-price', 'k-fire', 'k-relay', 'k-fail'));
+    if (!step) return;
+    (step.nodes || []).forEach((id) => $(id).classList.add('active'));
+    if (step.edge) $(step.edge).classList.add('active', 'k-' + step.kind);
+  }
+
+  // ---------- narration ----------
+  function narrate(i) {
+    const steps = current.steps;
+    const step = steps[Math.min(i, steps.length - 1)];
+    const finished = i >= steps.length;
+    $('now-eyebrow').textContent = finished ? `${current.name} · خلص` : `${current.name} · خطوة ${i + 1} من ${steps.length}`;
+    $('now-title').textContent = step.title;
+    $('now-text').textContent = step.text;
+    $('now-code').textContent = step.code;
+    const m = $('now-metric');
+    if (step.metric) { m.hidden = false; m.className = 'metric ' + step.metric[0]; m.textContent = step.metric[1]; } else { m.hidden = true; }
+    $('eval-metric').textContent = hash() ? 'HGETALL per tick' : 'ZRANGEBYSCORE per tick';
+    document.querySelectorAll('#steps li').forEach((li, k) => {
+      li.classList.toggle('done', k < i);
+      li.classList.toggle('current', k === i);
+    });
+  }
+
+  function buildList() {
+    const ol = $('steps');
+    ol.replaceChildren();
+    current.steps.forEach((s, k) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = s.title;
+      b.addEventListener('click', () => jumpTo(k));
+      li.append(b);
+      ol.append(li);
+    });
+  }
+
+  // ---------- clock & packet ----------
+  // One clock that only advances while playing, so pause freezes packets mid-flight.
+  let clock = 0, last = null, playing = false, stepping = false, speed = 1, gen = 0;
+  const tick = (now) => {
+    if (last !== null && playing) clock += (now - last) * speed;
+    last = now;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+
+  const wait = (ms, g) => new Promise((resolve) => {
+    const until = clock + (reduceMotion ? 0 : ms);
+    const poll = () => (g !== gen ? resolve(false) : clock >= until ? resolve(true) : requestAnimationFrame(poll));
+    poll();
+  });
+
+  const packet = $('packet'), pill = $('packet-pill'), ptext = $('packet-text');
+  function placePacket(p) {
+    packet.setAttribute('transform', `translate(${p.x} ${p.y})`);
+  }
+  function labelPacket(label, kind) {
+    packet.setAttribute('class', 'packet k-' + kind);
+    ptext.textContent = label;
+    const w = Math.max(30, ptext.getComputedTextLength() + 18);
+    pill.setAttribute('x', -w / 2); pill.setAttribute('y', -31); pill.setAttribute('width', w); pill.setAttribute('height', 19);
+    ptext.setAttribute('y', -18);
+  }
+
+  function travel(step, g) {
+    const path = $(step.edge);
+    const L = path.getTotalLength();
+    const dur = 1500 * (step.dur || 1);
+    const stop = step.fail ? 0.78 : 1;
+    labelPacket(step.label, step.kind);
+    packet.setAttribute('visibility', 'visible');
+    const at = (t) => path.getPointAtLength((step.reverse ? 1 - t : t) * L);
+    if (reduceMotion) { placePacket(at(stop)); return Promise.resolve(true); }
+    const start = clock;
+    return new Promise((resolve) => {
+      const frame = () => {
+        if (g !== gen) return resolve(false);
+        const raw = Math.min(1, (clock - start) / dur);
+        // Ease in-out; a failed delivery stops short of the target and bounces back.
+        const e = raw < 0.5 ? 2 * raw * raw : 1 - Math.pow(-2 * raw + 2, 2) / 2;
+        const t = step.fail ? (e < 0.7 ? (e / 0.7) * stop : stop - ((e - 0.7) / 0.3) * stop * 0.35) : e;
+        placePacket(at(t));
+        if (raw >= 1) return resolve(true);
+        requestAnimationFrame(frame);
+      };
+      frame();
+    });
+  }
+
+  // ---------- runner ----------
+  let scenarioKey = 'create', current, index = 0;
+
+  async function runStep(step, g) {
+    highlight(step);
+    if (step.edge) {
+      const ok = await travel(step, g);
+      if (!ok) return false;
+    } else {
+      packet.setAttribute('visibility', 'hidden');
+      if (!(await wait(700, g))) return false;
+    }
+    if (step.apply) step.apply(state);
+    render();
+    return true;
+  }
+
+  async function run(g) {
+    while (index < current.steps.length) {
+      narrate(index);
+      if (!(await runStep(current.steps[index], g))) return;
+      index++;
+      if (stepping) { playing = false; stepping = false; syncPlay(); }
+      if (index < current.steps.length && !(await wait(900, g))) return;
+    }
+    if (g !== gen) return;
+    narrate(index);
+    packet.setAttribute('visibility', 'hidden');
+    highlight(null);
+    playing = false;
+    syncPlay();
+  }
+
+  function load(key, { autoplay = false } = {}) {
+    gen++;
+    scenarioKey = key;
+    current = { name: scenarios[key].name, steps: scenarios[key].steps() };
+    state = fresh(key);
+    index = 0;
+    packet.setAttribute('visibility', 'hidden');
+    highlight(null);
+    buildList();
+    render();
+    narrate(0);
+    document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scenario === key)));
+    playing = autoplay && !reduceMotion;
+    syncPlay();
+    run(gen);
+  }
+
+  // Replay earlier steps' state changes instantly, then continue from step k.
+  function jumpTo(k) {
+    gen++;
+    state = fresh(scenarioKey);
+    current.steps.slice(0, k).forEach((s) => s.apply && s.apply(state));
+    index = k;
+    packet.setAttribute('visibility', 'hidden');
+    highlight(null);
+    render();
+    narrate(k);
+    run(gen);
+  }
+
+  function syncPlay() {
+    const finished = index >= current.steps.length;
+    $('btn-play').textContent = finished ? 'إعادة' : playing ? 'إيقاف' : 'تشغيل';
+    $('btn-step').disabled = finished;
+  }
+
+  $('btn-play').addEventListener('click', () => {
+    if (index >= current.steps.length) { load(scenarioKey, { autoplay: true }); return; }
+    playing = !playing;
+    stepping = false;
+    syncPlay();
+  });
+  $('btn-step').addEventListener('click', () => {
+    if (index >= current.steps.length) return;
+    stepping = true;
+    playing = true;
+    syncPlay();
+  });
+  $('btn-restart').addEventListener('click', () => load(scenarioKey));
+  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => load(b.dataset.scenario, { autoplay: true })));
+  document.querySelectorAll('[data-speed]').forEach((b) => b.addEventListener('click', () => {
+    speed = Number(b.dataset.speed);
+    document.querySelectorAll('[data-speed]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+  }));
+  document.querySelectorAll('[data-layout]').forEach((b) => b.addEventListener('click', () => {
+    layout = b.dataset.layout;
+    document.querySelectorAll('[data-layout]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+    const key = scenarioKey === 'create' || scenarioKey === 'outage' ? 'tick' : scenarioKey;
+    load(key, { autoplay: true });
+  }));
+
+  load('create', { autoplay: true });
+})();
+</script>

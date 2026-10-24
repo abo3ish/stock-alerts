@@ -7,15 +7,29 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 
 /**
- * The Redis side of the dual write. This key layout is a contract with the Node engine:
+ * The Redis side of the outbox. This key layout is a contract with the Node engine (engine/src/alerts.ts):
  *
- *   alerts:{SYMBOL}  (hash)   field = alert id   value = {"user_id", "target_price", "condition"}
+ *   alerts:above:{SYMBOL}  (sorted set)  member = alert id   score = target price   ("fire when price >= score")
+ *   alerts:below:{SYMBOL}  (sorted set)  member = alert id   score = target price   ("fire when price <= score")
+ *   alerts:data:{SYMBOL}   (hash)        field  = alert id   value = {"user_id", "target_price", "condition"}
+ *
+ * The sorted sets let the engine ask Redis for only the alerts a price satisfies (ZRANGEBYSCORE),
+ * instead of loading every alert of the symbol. The hash holds the details for the few that match.
+ *
+ * Writes are pipelined (one round trip per batch) and ordered so a concurrent reader is always safe:
+ * data before index on put, index before data on remove. Not MULTI: phpredis sends every queued command
+ * in its own round trip, which made a 1M-alert rebuild take ~15 minutes instead of ~25 seconds.
  */
 final class AlertCache
 {
-    public static function key(string $symbol): string
+    public static function setKey(string $condition, string $symbol): string
     {
-        return "alerts:{$symbol}";
+        return "alerts:{$condition}:{$symbol}";
+    }
+
+    public static function dataKey(string $symbol): string
+    {
+        return "alerts:data:{$symbol}";
     }
 
     /** Record "this alert changed". Call inside the same DB transaction as the change. */
@@ -27,7 +41,7 @@ final class AlertCache
     /**
      * Apply pending outbox rows to Redis. Returns how many were applied.
      * Each row syncs the alert's *current* DB state (not the change itself), so replaying
-     * a row twice or out of order still ends correct: HSET/HDEL are idempotent.
+     * a row twice or out of order still ends correct: ZADD/ZREM/HSET/HDEL are idempotent.
      * If Redis throws, the transaction rolls back and the rows stay for the next try.
      * ponytail: assumes one relay process; two relays can race on the same alert. Partition by alert_id if you scale it.
      */
@@ -41,12 +55,12 @@ final class AlertCache
 
             $alerts = Alert::whereIn('id', $rows->pluck('alert_id'))->get()->keyBy('id');
 
-            Redis::pipeline(function ($pipe) use ($rows, $alerts) {
+            Redis::pipeline(function ($redis) use ($rows, $alerts) {
                 foreach ($rows as $row) {
                     $alert = $alerts->get($row->alert_id);
                     $alert?->status === 'active'
-                        ? $pipe->hset(self::key($row->symbol), (string) $row->alert_id, self::payload($alert))
-                        : $pipe->hdel(self::key($row->symbol), (string) $row->alert_id);
+                        ? self::put($redis, $alert)
+                        : self::remove($redis, $row->symbol, (string) $row->alert_id);
                 }
             });
 
@@ -66,15 +80,35 @@ final class AlertCache
         $count = 0;
 
         Alert::where('status', 'active')->chunkById(5000, function ($alerts) use (&$count) {
-            Redis::pipeline(function ($pipe) use ($alerts) {
+            Redis::pipeline(function ($redis) use ($alerts) {
                 foreach ($alerts as $alert) {
-                    $pipe->hset(self::key($alert->symbol), (string) $alert->id, self::payload($alert));
+                    self::put($redis, $alert);
                 }
             });
             $count += $alerts->count();
         });
 
         return $count;
+    }
+
+    // Data first, then add to the right set, then leave the other one (only matters on an above <-> below change).
+    // The alert is never missing from the index; for an instant it can sit in both sets, which is harmless:
+    // the engine re-checks every candidate against the data's current condition (triggeredBy).
+    private static function put($redis, Alert $alert): void
+    {
+        $id = (string) $alert->id;
+        $other = $alert->condition === 'above' ? 'below' : 'above';
+        $redis->hSet(self::dataKey($alert->symbol), $id, self::payload($alert));
+        $redis->zAdd(self::setKey($alert->condition, $alert->symbol), (float) $alert->target_price, $id);
+        $redis->zRem(self::setKey($other, $alert->symbol), $id);
+    }
+
+    // Index first, then data: a reader may find data without an index entry (unused), never the reverse.
+    private static function remove($redis, string $symbol, string $id): void
+    {
+        $redis->zRem(self::setKey('above', $symbol), $id);
+        $redis->zRem(self::setKey('below', $symbol), $id);
+        $redis->hDel(self::dataKey($symbol), $id);
     }
 
     private static function payload(Alert $alert): string

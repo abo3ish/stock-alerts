@@ -1,4 +1,25 @@
 # Herd already uses 5432/6379, so host ports are shifted.
+
+x-laravel-worker: &laravel-worker
+  build: ./alert-api/docker/worker
+  volumes:
+    - ./alert-api:/app
+  # Real env vars win over alert-api/.env, so the same code reaches services by their Docker names.
+  environment:
+    KAFKA_BROKERS: redpanda:9092
+    DB_HOST: postgres
+    DB_PORT: 5432
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+  depends_on:
+    redpanda:
+      condition: service_healthy
+    postgres:
+      condition: service_started
+    redis:
+      condition: service_started
+  restart: unless-stopped
+
 services:
   redpanda:
     image: redpandadata/redpanda:v24.2.7
@@ -8,6 +29,10 @@ services:
       - --smp 1
       - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
       - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      # Topics are created only by our code (ensureTopic) with the right partition count. With auto-create on,
+      # producing to a deleted topic silently recreated stock-prices with 1 partition instead of 12.
+      # Applies on a fresh cluster; an existing one needs: rpk cluster config set auto_create_topics_enabled false
+      - --set redpanda.auto_create_topics_enabled=false
     ports:
       - "19092:19092"
     volumes:
@@ -44,6 +69,16 @@ services:
       - "5433:5432"
     volumes:
       - postgres:/var/lib/postgresql/data
+
+  # alert-api's long-running workers: same image, same mounted code, one process each.
+  # Docker is their supervisor: started by `docker compose up`, restarted when they crash.
+  alert-consumer:
+    <<: *laravel-worker
+    command: php artisan alerts:consume-triggered # Kafka alert-triggered -> Postgres
+
+  alert-relay:
+    <<: *laravel-worker
+    command: php artisan alerts:relay # Postgres outbox -> Redis. Exactly one replica: never scale it.
 
 volumes:
   redpanda:
