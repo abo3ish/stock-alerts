@@ -2,7 +2,9 @@
 // Shell only: wiring and I/O. Matching rules are in alerts.ts, metrics in metrics.ts.
 
 import { Redis } from 'ioredis';
-import { alertsKey, parseAlerts, toTriggeredEvent, triggeredBy, type Alert, type Tick } from './alerts.ts';
+import {
+  Condition, alertsFromData, dataKey, satisfiedRange, setKey, toTriggeredEvent, triggeredBy, type Alert, type Tick,
+} from './alerts.ts';
 import { evaluatorConfig, kafkaConfig } from './config.ts';
 import { connectConsumer, connectProducer, createKafka, ensureTopic, fromMessage, toMessage } from './kafka.ts';
 import { onShutdown } from './lifecycle.ts';
@@ -25,9 +27,21 @@ const [producer, consumer] = await Promise.all([
 
 const reporter = createReporter(emptyEvaluatorStats, addTick, formatEvaluatorStats, log.info);
 
-// ponytail: HGETALL loads every alert of the symbol on every tick: O(alerts per symbol).
-// bench.sh shows it saturates at ~1M alerts; the fix is sorted sets (query only the price range that matches).
-const loadAlerts = async (symbol: string): Promise<Alert[]> => parseAlerts(await redis.hgetall(alertsKey(symbol)));
+// Ask Redis only for the alerts this price satisfies: one range query per sorted set, O(log n + matches),
+// then the details of just those ids. (The old HGETALL loaded every alert of the symbol on every tick: O(n).)
+async function loadSatisfied(tick: Tick): Promise<Alert[]> {
+  const results = await redis
+    .pipeline()
+    .zrangebyscore(setKey(Condition.Above, tick.symbol), ...satisfiedRange(Condition.Above, tick.price))
+    .zrangebyscore(setKey(Condition.Below, tick.symbol), ...satisfiedRange(Condition.Below, tick.price))
+    .exec();
+  const ids = results!.flatMap(([error, found]) => {
+    if (error) throw error;
+    return found as string[];
+  });
+  if (ids.length === 0) return [];
+  return alertsFromData(ids, await redis.hmget(dataKey(tick.symbol), ...ids));
+}
 
 const logFired = (tick: Tick, fired: Alert[]) => {
   for (const alert of fired.slice(0, 5)) {
@@ -44,18 +58,26 @@ async function fire(tick: Tick, fired: Alert[]) {
     topic: kafkaCfg.triggeredTopic,
     messages: fired.map((alert) => toMessage(alert.id, toTriggeredEvent(alert, tick, now))),
   });
-  await redis.hdel(alertsKey(tick.symbol), ...fired.map((alert) => alert.id));
+  const ids = fired.map((alert) => alert.id);
+  // One MULTI so a concurrent reader never sees an id in a set without its data.
+  await redis
+    .multi()
+    .zrem(setKey(Condition.Above, tick.symbol), ...ids)
+    .zrem(setKey(Condition.Below, tick.symbol), ...ids)
+    .hdel(dataKey(tick.symbol), ...ids)
+    .exec();
   logFired(tick, fired);
 }
 
+// Redis already filtered by price; triggeredBy re-checks in code as a guard against a bad score.
 async function evaluate(tick: Tick) {
-  const alerts = await loadAlerts(tick.symbol);
-  const fired = triggeredBy(alerts, tick.price);
+  const candidates = await loadSatisfied(tick);
+  const fired = triggeredBy(candidates, tick.price);
   if (fired.length > 0) await fire(tick, fired);
-  return { checked: alerts.length, fired: fired.length };
+  return { checked: candidates.length, fired: fired.length };
 }
 
-log.info(`${kafkaCfg.pricesTopic} -> alerts:{SYMBOL} in Redis -> ${kafkaCfg.triggeredTopic}`);
+log.info(`${kafkaCfg.pricesTopic} -> alerts:{above,below}:{SYMBOL} in Redis -> ${kafkaCfg.triggeredTopic}`);
 
 await consumer.run({
   eachMessage: async ({ message }) => {

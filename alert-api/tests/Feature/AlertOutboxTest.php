@@ -51,6 +51,29 @@ describe('write side: the request only touches Postgres', function () {
 });
 
 describe('relay', function () {
+    it('indexes each alert in the sorted set of its condition, scored by target price', function () {
+        $above = createAlert(['condition' => 'above', 'target_price' => 200]);
+        $below = createAlert(['condition' => 'below', 'target_price' => 150.5]);
+        AlertCache::relay();
+
+        expect(Redis::zscore(AlertCache::setKey('above', 'AAPL'), $above))->toEqual(200)
+            ->and(Redis::zscore(AlertCache::setKey('below', 'AAPL'), $below))->toEqual(150.5);
+        // What the engine will ask: "above" alerts a price of 210 satisfies, "below" alerts a price of 140 satisfies.
+        expect(Redis::zrangebyscore(AlertCache::setKey('above', 'AAPL'), '-inf', 210))->toEqual([(string) $above])
+            ->and(Redis::zrangebyscore(AlertCache::setKey('below', 'AAPL'), 140, '+inf'))->toEqual([(string) $below]);
+    });
+
+    it('moves an alert to the other set when its condition changes', function () {
+        $id = createAlert(['condition' => 'above', 'target_price' => 200]);
+        AlertCache::relay();
+
+        $this->patchJson("/api/alerts/{$id}", ['condition' => 'below'])->assertOk();
+        AlertCache::relay();
+
+        expect(cachedAlerts()[$id]['condition'])->toBe('below') // cachedAlerts() also checks it left the "above" set
+            ->and(Redis::zscore(AlertCache::setKey('above', 'AAPL'), $id))->toBeFalse();
+    });
+
     it('syncs a created alert and clears the outbox', function () {
         $id = createAlert();
 

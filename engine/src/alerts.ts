@@ -1,7 +1,9 @@
 // Alert rules: pure functions only (no Redis, no Kafka), so they are trivial to test.
 
 // Contract with alert-api (app/Services/AlertCache.php):
-//   hash alerts:{SYMBOL}   field = alert id   value = JSON CachedAlert
+//   alerts:above:{SYMBOL}  sorted set  member = alert id  score = target price  (fires when price >= score)
+//   alerts:below:{SYMBOL}  sorted set  member = alert id  score = target price  (fires when price <= score)
+//   alerts:data:{SYMBOL}   hash        field = alert id   value = JSON CachedAlert
 // A const object + union type instead of `enum`: Node runs TS by stripping types only, and an enum
 // is runtime code it refuses (ERR_INVALID_TYPESCRIPT_SYNTAX). Usage is the same: Condition.Above.
 export const Condition = { Above: 'above', Below: 'below' } as const;
@@ -22,11 +24,18 @@ export type TriggeredEvent = {
   triggered_at: number;
 };
 
-export const alertsKey = (symbol: string) => `alerts:${symbol}`;
+export const setKey = (condition: Condition, symbol: string) => `alerts:${condition}:${symbol}`;
+export const dataKey = (symbol: string) => `alerts:data:${symbol}`;
 
-// HGETALL result -> alerts.
-export const parseAlerts = (hash: Record<string, string>): Alert[] =>
-  Object.entries(hash).map(([id, json]) => ({ id, ...(JSON.parse(json) as CachedAlert) }));
+// The score ranges a price satisfies, as ZRANGEBYSCORE arguments [min, max].
+// above: every target at or under the price. below: every target at or over it.
+export const satisfiedRange = (condition: Condition, price: number): [string, string] =>
+  condition === Condition.Above ? ['-inf', String(price)] : [String(price), '+inf'];
+
+// HMGET result -> alerts. A null (id in a set but not in the hash) is skipped. alert-api writes data before
+// the index and removes the index before the data, so this only shows up if the data was deleted by hand.
+export const alertsFromData = (ids: string[], jsons: (string | null)[]): Alert[] =>
+  ids.flatMap((id, i) => (jsons[i] ? [{ id, ...(JSON.parse(jsons[i]) as CachedAlert) }] : []));
 
 // State, not crossing: an "above 200" alert created while the price is already 210 fires on the next tick.
 export const matches = (alert: CachedAlert, price: number): boolean =>
