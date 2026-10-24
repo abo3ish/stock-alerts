@@ -7,6 +7,7 @@ test('symbolNames reads shared/symbols.json: hot names first, every name unique'
   // LoadTestSeeder gives these 7 the most alerts, so they must stay first.
   assert.deepEqual(names.slice(0, 7), ['AAPL', 'TSLA', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META']);
   assert.equal(new Set(names).size, 5000, 'a duplicate name would be picked more often and share one Redis key');
+  assert.deepEqual(names.filter((n) => /^SYM\d{4}$/.test(n)), [], 'all names are real tickers, no SYM#### filler');
   assert.throws(() => symbolNames(5001), /only 5000 names/);
 });
 

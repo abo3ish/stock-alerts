@@ -1,5 +1,6 @@
 // Evaluation Engine: price ticks (Kafka) -> matching alerts (Redis) -> alert-triggered events (Kafka).
 // Shell only: wiring and I/O. Matching rules are in alerts.ts, metrics in metrics.ts.
+
 import { Redis } from 'ioredis';
 import { alertsKey, parseAlerts, toTriggeredEvent, triggeredBy, type Alert, type Tick } from './alerts.ts';
 import { evaluatorConfig, kafkaConfig } from './config.ts';
