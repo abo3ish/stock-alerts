@@ -54,6 +54,7 @@
   header { display: grid; gap: 6px; }
   h1 { margin: 0; font-size: clamp(26px, 4vw, 38px); line-height: 1.15; letter-spacing: -0.01em; text-wrap: balance; }
   .tagline { margin: 0; color: var(--muted); max-width: 62ch; }
+  .tagline a { color: var(--write); font-weight: 600; }
   .stack { display: flex; flex-wrap: wrap; gap: 6px; direction: ltr; justify-content: flex-end; }
   .stack span { font-family: var(--font-mono); font-size: 12px; background: var(--chip); color: var(--muted); padding: 2px 8px; border-radius: 4px; }
 
@@ -168,6 +169,30 @@
   th { color: var(--muted); font-weight: 500; font-size: 13px; }
   td.bad { color: var(--fail); } td.good { color: var(--price); font-weight: 600; }
 
+
+  .decisions { display: grid; gap: 10px; scroll-margin-top: 16px; }
+  .dec-head { display: grid; gap: 6px; margin-top: 8px; }
+  .dec-head h2 { margin: 0; font-size: clamp(22px, 3vw, 28px); text-wrap: balance; }
+  .dec-head p { margin: 0; color: var(--muted); max-width: 70ch; }
+  .dec-group { margin: 14px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+  .decisions details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+  .decisions details[open] { border-color: var(--muted); }
+  .decisions summary {
+    list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+    padding: 12px 16px; font-weight: 600; font-size: 15.5px;
+  }
+  .decisions summary::-webkit-details-marker { display: none; }
+  .decisions summary::before { content: "+"; font-family: var(--font-mono); color: var(--muted); width: 1ch; }
+  .decisions details[open] summary::before { content: "\2212"; }
+  .decisions summary:focus-visible { outline: 2px solid var(--write); outline-offset: -2px; border-radius: 10px; }
+  .decisions .q { flex: 1 1 18rem; min-width: 0; }
+  .decisions .pick { font-family: var(--font-mono); font-size: 12px; font-weight: 500; color: var(--write); background: var(--chip); border-radius: 4px; padding: 2px 8px; }
+  .decisions .ans { padding: 0 16px 14px; display: grid; gap: 10px; min-width: 0; }
+  .decisions ul { margin: 0; padding-inline-start: 20px; display: grid; gap: 6px; max-width: 72ch; }
+  .decisions li, .decisions .alt { line-height: 1.75; font-size: 14.5px; }
+  .decisions .alt { margin: 0; max-width: 72ch; padding: 8px 12px; background: var(--bg); border-radius: 6px; }
+  .decisions code { font-family: var(--font-mono); font-size: 12.5px; background: var(--chip); border-radius: 3px; padding: 1px 4px; }
+
   @media (prefers-reduced-motion: reduce) {
     .edge.active { animation: none; }
     .node rect.box, .edge { transition: none; }
@@ -178,7 +203,7 @@
   <header>
     <div class="stack"><span>Laravel 13</span><span>Node 23</span><span>Redpanda (Kafka API)</span><span>Redis 7</span><span>PostgreSQL 17</span></div>
     <h1>Stock Alert Pipeline</h1>
-    <p class="tagline">إيه اللي بيحصل جوه السيستم خطوة بخطوة: من لحظة ما المستخدم يعمل تنبيه، لحد ما السعر يوصل والتنبيه يتنفذ. اختار سيناريو، ودوس تشغيل أو امشي خطوة خطوة.</p>
+    <p class="tagline">إيه اللي بيحصل جوه السيستم خطوة بخطوة: من لحظة ما المستخدم يعمل تنبيه، لحد ما السعر يوصل والتنبيه يتنفذ. اختار سيناريو، ودوس تشغيل أو امشي خطوة خطوة. وتحت، <a href="#decisions">القرارات وليه</a>.</p>
   </header>
 
   <div class="controls">
@@ -365,6 +390,195 @@
         </tbody>
       </table>
     </div>
+  </section>
+
+  <section class="decisions" id="decisions" aria-labelledby="decisions-title">
+    <div class="dec-head">
+      <h2 id="decisions-title">القرارات وليه</h2>
+      <p>كل قرار في السيستم ده كان ليه بديل، والانترفيور غالباً هيسأل عنه. كل سؤال تحته: اخترنا إيه، وليه، وإمتى البديل يبقى هو الصح.</p>
+    </div>
+
+    <h3 class="dec-group">الرسايل والـ streaming</h3>
+
+    <details>
+      <summary><span class="q">ليه Kafka مش RabbitMQ؟</span><span class="pick" dir="ltr">Kafka</span></summary>
+      <div class="ans">
+        <ul>
+          <li><b>الترتيب لكل سهم.</b> الـ key هو الـ symbol، فكل أسعار AAPL بتنزل على نفس الـ partition وبتتقري بالترتيب. في RabbitMQ، لو كذا consumer بيسحبوا من نفس الـ queue، الترتيب بيضيع، وممكن سعر قديم يتعالج بعد سعر أحدث منه.</li>
+          <li><b>الرسالة مابتتمسحش لما تتقري.</b> Kafka عبارة عن log. تقدر ترجّع الـ consumer لورا وتعيد المعالجة (عملنا كده في <code dir="ltr">bench.sh</code> بـ <code dir="ltr">rpk group seek</code>). RabbitMQ بيمسح الرسالة بعد الـ ack.</li>
+          <li><b>الـ scaling بالـ consumer groups.</b> زوّد evaluators، وKafka بيوزع الـ 12 partition عليهم لوحده. وأي خدمة جديدة (analytics مثلاً) تقرا نفس الأسعار بـ group تاني، من غير ما تأثر على حد.</li>
+          <li><b>الحجم.</b> 2,000 رسالة في الثانية رقم صغير على Kafka، والـ batching معمول عشان الـ throughput العالي.</li>
+        </ul>
+        <p class="alt"><b>إمتى RabbitMQ؟</b> للـ task queues: إرسال الإشعارات نفسها، لما كل رسالة محتاجة retry لوحدها، أو priority، أو routing معقد، ومش فارق الترتيب.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه Redpanda مش Kafka نفسه؟</span><span class="pick" dir="ltr">Redpanda</span></summary>
+      <div class="ans">
+        <ul>
+          <li>نفس الـ Kafka API بالظبط. الكود بيستخدم <code dir="ltr">kafkajs</code> و <code dir="ltr">rdkafka</code> العاديين، ومش عارف إنه بيكلم Redpanda.</li>
+          <li>binary واحد من غير JVM ولا ZooKeeper، فبيقوم في ثواني على اللابتوب، وبياكل رامات أقل، ومعاه Console جاهز.</li>
+        </ul>
+        <p class="alt"><b>في الـ production؟</b> الاتنين ينفعوا، أو Kafka managed زي MSK أو Confluent. التغيير هيبقى في <code dir="ltr">KAFKA_BROKERS</code> بس.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه partition بالـ symbol؟ وليه 12 بالذات؟</span><span class="pick" dir="ltr">key = symbol</span></summary>
+      <div class="ans">
+        <ul>
+          <li>نفس السهم دايماً بيروح لنفس الـ partition، فبيروح لنفس الـ evaluator. ده بيضمن إن الأسعار بتتعالج بترتيبها، ومحدش بيقيّم سعر قديم بعد سعر جديد.</li>
+          <li>عدد الـ partitions هو أقصى عدد evaluators يشتغلوا مع بعض. 12 بيدينا مساحة نكبر فيها.</li>
+          <li>بنختار الرقم من الأول، لأن زيادة partitions بعدين بتغيّر السهم ده هيروح على أنهي partition، وفي اللحظة دي الترتيب ممكن يتلخبط.</li>
+        </ul>
+        <p class="alt"><b>العيب:</b> السهم الواحد مابيتقسمش. لو سهم واحد بقى سخن جداً (<span dir="ltr">hot partition</span>)، زيادة الـ consumers مش هتفيده. الحل وقتها تقسيم تنبيهات السهم نفسه، مش زيادة partitions.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه الـ evaluator بيبعت لـ Kafka بدل ما يحدّث الداتابيز بنفسه؟</span><span class="pick" dir="ltr">alert-triggered topic</span></summary>
+      <div class="ans">
+        <ul>
+          <li>الـ evaluator هو المسار السخن. لو استنى Postgres مع كل تنبيه بيتنفذ، هيتأخر في الأسعار اللي جاية وراه.</li>
+          <li>الـ event ممكن يتقري من أكتر من مكان: Laravel بيحدّث الحالة، وخدمة الإشعارات بتبعت push، من غير ما الـ evaluator يعرف أي حاجة عن الاتنين.</li>
+          <li>لو Laravel وقع، الـ events بتستناه في Kafka، ومابتضيعش.</li>
+        </ul>
+      </div>
+    </details>
+
+    <h3 class="dec-group">التخزين</h3>
+
+    <details>
+      <summary><span class="q">ليه PostgreSQL مش Cassandra؟</span><span class="pick" dir="ltr">PostgreSQL</span></summary>
+      <div class="ans">
+        <ul>
+          <li><b>الحجم مش محتاج.</b> 5 مليون مستخدم في كام تنبيه لكل واحد، يعني عشرات الملايين من الصفوف. ده Postgres واحد يشيله بسهولة. وكتابة التنبيهات بتحصل من المستخدمين، مش من الأسعار، فهي قليلة.</li>
+          <li><b>الـ Outbox محتاج transaction.</b> التنبيه وسطر الـ outbox لازم يتكتبوا مع بعض أو مايتكتبوش خالص. Cassandra مافيهاش transaction بين صفين في partitions مختلفة.</li>
+          <li><b>الـ idempotency محتاجة conditional update.</b> <code dir="ltr">UPDATE ... WHERE status = 'active'</code> رخيصة في Postgres. في Cassandra المقابل ليها (lightweight transactions) غالي.</li>
+          <li><b>استعلامات متنوعة.</b> تنبيهات المستخدم، والتنبيهات النشطة لسهم، وإعادة بناء الكاش. Cassandra بتتصمم على استعلام واحد معروف من الأول.</li>
+        </ul>
+        <p class="alt"><b>إمتى Cassandra؟</b> لو هنخزن كل الأسعار (time series بمليارات الصفوف وكتابة مستمرة)، أو محتاجين multi-region writes. وقتها Cassandra أو TimescaleDB تبقى منطقية.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه Redis؟ ما Postgres عنده index ويقدر يعمل range query.</span><span class="pick" dir="ltr">Redis</span></summary>
+      <div class="ans">
+        <ul>
+          <li>صح، index على <code dir="ltr">(symbol, target_price)</code> كان هيجاوب نفس السؤال. بس ده هيبقى 2,000 query في الثانية على نفس الداتابيز اللي بتخدم الـ API.</li>
+          <li>Redis بيرد في أقل من ملّي ثانية من الذاكرة، وبيعزل مسار القراءة السخن عن مصدر الحقيقة. لو الـ evaluators زادت، Postgres مش هيحس.</li>
+          <li>لو Redis اتمسح، Postgres لسه فيه كل حاجة، و <code dir="ltr">alerts:rebuild-cache</code> بيرجّعه.</li>
+        </ul>
+        <p class="alt"><b>العيب:</b> بقى عندنا نسختين من البيانات، ومحتاجين حاجة تخليهم متطابقين. وده سبب الـ Outbox.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه Sorted Set مش Hash زي الانترفيو؟</span><span class="pick" dir="ltr">ZSET + HASH</span></summary>
+      <div class="ans">
+        <ul>
+          <li>الـ Hash بيدي O(1) في الإضافة والحذف، بس ده تحسين لمسار الكتابة. القراءة مع كل سعر كانت بتجيب كل تنبيهات السهم: 100 ألف لأبل مع كل tick.</li>
+          <li>في الـ Sorted Set، الـ score هو السعر المستهدف، فـ <code dir="ltr">ZRANGEBYSCORE</code> بترجّع بس التنبيهات اللي السعر حققها، بـ O(log n + k).</li>
+          <li>القياس: التأخير نزل من 18 ثانية لـ 31ms، والـ evaluator بقى مشغول 50% بدل 99%.</li>
+        </ul>
+        <p class="alt"><b>التمن:</b> الذاكرة زادت من 81MB لـ 114MB، وكل تنبيه بقى مكتوب في مفتاحين بدل واحد.</p>
+      </div>
+    </details>
+
+    <h3 class="dec-group">الـ API والخدمات</h3>
+
+    <details>
+      <summary><span class="q">ليه REST مش GraphQL أو gRPC؟</span><span class="pick" dir="ltr">REST</span></summary>
+      <div class="ans">
+        <ul>
+          <li>الـ API هنا CRUD بسيط على resource واحد: اعمل تنبيه، عدّله، امسحه، اعرض تنبيهاتي. ده بالظبط اللي REST معمول له.</li>
+          <li>أي client يقدر يكلمه: موبايل، أو ويب، أو <code dir="ltr">curl</code>. ومن غير schema ولا code generation.</li>
+          <li><b>GraphQL</b> بيفيد لما الـ client محتاج يجمّع بيانات من أشكال كتير في request واحد. وده مش موجود هنا.</li>
+          <li><b>gRPC</b> بيفيد بين الخدمات وبعضها. والخدمات عندنا مابتكلمش بعض مباشرة أصلاً، بتكلم بعض عن طريق Kafka.</li>
+        </ul>
+        <p class="alt"><b>والإشعار نفسه؟</b> مش REST. السيرفر هو اللي بيبدأ، فبيوصل بـ push notification أو WebSocket أو SSE.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه لغتين، Laravel وNode، مش لغة واحدة؟</span><span class="pick" dir="ltr">Laravel + Node</span></summary>
+      <div class="ans">
+        <ul>
+          <li><b>Laravel</b> للـ API: validation وmigrations وORM وtests جاهزين. وده الجزء اللي فيه business logic.</li>
+          <li><b>Node</b> للـ evaluator: process واحد شغال على طول، بيقرا stream ويعمل I/O كتير مع Redis وKafka، والـ event loop مناسب لده.</li>
+          <li>العقد بينهم واضح ومكتوب: شكل مفاتيح Redis، وشكل الـ event. وفيه tests على الناحيتين.</li>
+        </ul>
+        <p class="alt"><b>بصراحة:</b> لغة واحدة كانت هتنفع. اللغتين هنا قرار تعليمي، ولما الفريق صغير، لغة واحدة غالباً أوفر.</p>
+      </div>
+    </details>
+
+    <h3 class="dec-group">الاعتمادية</h3>
+
+    <details>
+      <summary><span class="q">ليه Outbox مش Dual Write؟</span><span class="pick" dir="ltr">Transactional Outbox</span></summary>
+      <div class="ans">
+        <ul>
+          <li>مافيش transaction واحدة بين Postgres وRedis. في الـ Dual Write، لو Redis وقع بعد ما Postgres اتكتب، التنبيه بيتسجل ومابيوصلش الكاش أبداً. جربناها: 500 للمستخدم، وصفوف مكررة لما عمل retry.</li>
+          <li>بالـ Outbox، الـ request بيكتب في Postgres بس (التنبيه + سطر outbox في نفس الـ transaction)، والـ relay بيوصّل لـ Redis بعدين. Redis واقع؟ التنبيه بيتأخر، بس مابيضيعش.</li>
+        </ul>
+        <p class="alt"><b>التمن:</b> eventual consistency. التنبيه بيوصل Redis بعد ما يتعمل بحوالي 200ms.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه relay بيعمل polling مش CDC بـ Debezium؟</span><span class="pick" dir="ltr">polling 200ms</span></summary>
+      <div class="ans">
+        <ul>
+          <li>الـ polling مش محتاج أي infrastructure زيادة: query على جدول كل 200ms، و <code dir="ltr">FOR UPDATE SKIP LOCKED</code>.</li>
+          <li>200ms تأخير على تنبيه المستخدم لسه عامله مش هتفرق معاه.</li>
+        </ul>
+        <p class="alt"><b>إمتى CDC؟</b> لو حجم التغييرات كبر، أو التأخير بقى مهم. Debezium بيقرا الـ WAL بتاع Postgres مباشرة، من غير polling ومن غير جدول outbox بيكبر. أو كخطوة وسط: <code dir="ltr">LISTEN/NOTIFY</code> عشان الـ relay يصحى فوراً.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه relay واحد بس؟</span><span class="pick" dir="ltr">1 replica</span></summary>
+      <div class="ans">
+        <ul>
+          <li>لو اتنين relays أخدوا تغييرين لنفس التنبيه، ممكن القديم يتكتب في Redis بعد الجديد.</li>
+          <li>Relay واحد بيوصّل مئات التغييرات في الثانية، وده أكتر بكتير من سرعة المستخدمين في إنهم يعملوا تنبيهات.</li>
+        </ul>
+        <p class="alt"><b>لو احتجنا نكبر:</b> نقسّم الشغل بـ <code dir="ltr">alert_id % N</code>، فكل تنبيه يبقى ليه relay واحد بس مسؤول عنه.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه at-least-once مش exactly-once؟</span><span class="pick" dir="ltr">idempotent consumer</span></summary>
+      <div class="ans">
+        <ul>
+          <li>Exactly-once في Kafka موجود، بس بيشتغل جوه Kafka بس. أول ما تكتب في داتابيز برّه، رجعنا لنفس المشكلة.</li>
+          <li>الأرخص إن الـ consumer يبقى idempotent: <code dir="ltr">UPDATE ... WHERE status = 'active'</code>. لو الـ event اتكرر، المرة التانية بتغيّر صفر صفوف ومابتبعتش حاجة.</li>
+          <li>الـ offset بيتعمله commit بعد المعالجة، مش قبلها. فلو الـ consumer وقع في النص، الرسالة بتتعاد، ومابتضيعش.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه الشرط "السعر فوق الهدف" مش "السعر عدّى الهدف"؟</span><span class="pick" dir="ltr">state, not crossing</span></summary>
+      <div class="ans">
+        <ul>
+          <li>"عدّى" محتاجة نعرف السعر اللي قبله، يعني state لكل سهم في الـ evaluator، ولازم تتحفظ لو الـ evaluator اتنقل لجهاز تاني.</li>
+          <li>"فوق" بيحتاج السعر الحالي بس. ولو التنبيه وصل Redis متأخر 200ms والسعر لسه فوق، أول tick بعدها هيشغّله.</li>
+        </ul>
+        <p class="alt"><b>العيب:</b> لو المستخدم عمل تنبيه "فوق 190" والسعر أصلاً 195، هيتنفذ على طول. ممكن الـ API يرفضه أو ينبّه المستخدم.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary><span class="q">ليه الـ workers في Docker والـ API في Herd؟</span><span class="pick" dir="ltr">Docker workers</span></summary>
+      <div class="ans">
+        <ul>
+          <li>الـ consumer محتاج extension اسمه <code dir="ltr">rdkafka</code>، والـ PHP بتاع Herd مابيقبلش extensions زيادة. فالـ image بتاعة الـ worker فيها PHP 8.4 + rdkafka.</li>
+          <li>Docker هو الـ supervisor: بيشغّل الـ relay والـ consumer مع <code dir="ltr">docker compose up</code>، ويعيد تشغيلهم لو وقعوا. وفيه <code dir="ltr">SIGTERM</code> handling عشان يقفلوا بنظافة ومايعملوش rebalance بياخد 45 ثانية.</li>
+        </ul>
+      </div>
+    </details>
   </section>
 </div>
 
