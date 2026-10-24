@@ -1,6 +1,7 @@
 // Price simulator: stands in for the external market-data provider. Random-walk prices -> Kafka.
-// ponytail: produces straight to Kafka, no separate Ingestion Service; add one when a real provider needs normalizing.
+// produces straight to Kafka, no separate Ingestion Service; add one when a real provider needs normalizing.
 // Shell only: setup and the produce loop. Price logic is in market.ts, metrics in metrics.ts.
+
 import { kafkaConfig, simulatorConfig } from './config.ts';
 import { connectProducer, createKafka, ensureTopic, toMessage } from './kafka.ts';
 import { onShutdown, sleep } from './lifecycle.ts';
@@ -18,7 +19,7 @@ const producer = await connectProducer(kafka);
 
 const nextTick = createMarket(symbolNames(cfg.symbols));
 const perBatch = Math.max(1, Math.round((cfg.ticksPerSec * cfg.batchMs) / 1000));
-const reporter = createReporter(emptyProducerStats, addSent, formatProducerStats(cfg.ticksPerSec), log.info);
+const reporter = createReporter(emptyProducerStats, addSent, formatProducerStats(cfg.ticksPerSec), log.info); // report ticks/s to the console.
 
 let running = true;
 let total = 0;

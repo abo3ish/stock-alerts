@@ -1,11 +1,14 @@
 // Simulated market: pure price math plus one closure that remembers the last price per symbol.
 import type { Tick } from './alerts.ts';
+// One list for both sides: alert-api's LoadTestSeeder seeds alerts for these exact names.
+import ALL_SYMBOLS from '../../shared/symbols.json' with { type: 'json' };
 
-const FAMOUS = ['AAPL', 'TSLA', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META'];
-
-// Same names the Laravel LoadTestSeeder uses: AAPL..META, then SYM0007..SYM4999.
-export const symbolNames = (count: number): string[] =>
-  Array.from({ length: count }, (_, i) => FAMOUS[i] ?? `SYM${String(i).padStart(4, '0')}`);
+export const symbolNames = (count: number): string[] => {
+  if (count > ALL_SYMBOLS.length) {
+    throw new Error(`SYMBOLS=${count} but shared/symbols.json has only ${ALL_SYMBOLS.length} names`);
+  }
+  return ALL_SYMBOLS.slice(0, count);
+};
 
 // One random-walk step of at most ±maxStep (0.2%), never below one cent. `rand` is in [0, 1).
 export const randomWalk = (price: number, rand: number, maxStep = 0.002): number =>
