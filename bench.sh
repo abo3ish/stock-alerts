@@ -17,7 +17,16 @@ trap stop EXIT
 docker compose exec -T redpanda rpk group seek evaluator --to end >/dev/null
 
 (cd engine && npm run evaluator >"$LOG/eval.log" 2>&1) &
-until grep -q 'joined the group' "$LOG/eval.log"; do sleep 0.5; done
+EVAL_PID=$!
+until grep -q 'joined the group' "$LOG/eval.log"; do
+  # Fail fast instead of waiting forever when the evaluator crashes on startup.
+  if ! kill -0 "$EVAL_PID" 2>/dev/null; then
+    echo "evaluator exited before joining the group:" >&2
+    tail -20 "$LOG/eval.log" >&2
+    exit 1
+  fi
+  sleep 0.5
+done
 
 (cd engine && TICKS_PER_SEC=$TPS npm run simulator >"$LOG/sim.log" 2>&1) &
 sleep "$DURATION"
