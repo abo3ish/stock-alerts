@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMarket, randomWalk, symbolNames } from './market.ts';
+import { createMarket, randomWalk, symbolNames } from '../src/market.ts';
 
 test('symbolNames matches the seeder: famous names first, then SYM0007...', () => {
   assert.deepEqual(symbolNames(9), ['AAPL', 'TSLA', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'SYM0007', 'SYM0008']);

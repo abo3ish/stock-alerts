@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addTick, emptyEvaluatorStats, formatEvaluatorStats } from './metrics.ts';
+import { addTick, emptyEvaluatorStats, formatEvaluatorStats } from '../src/metrics.ts';
 
 const sample = (symbol: string, tookMs: number, lagMs = 10) => ({ symbol, checked: 100, fired: 1, lagMs, tookMs });
 

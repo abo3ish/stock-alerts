@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { matches, parseAlerts, toTriggeredEvent, triggeredBy, type Alert } from './alerts.ts';
+import { matches, parseAlerts, toTriggeredEvent, triggeredBy, type Alert } from '../src/alerts.ts';
 
 const alert = (id: string, condition: 'above' | 'below', target_price: number): Alert => ({ id, user_id: 1, target_price, condition });
 

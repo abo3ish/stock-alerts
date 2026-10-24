@@ -5,7 +5,7 @@
   "scripts": {
     "simulator": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=TimeoutNegativeWarning --env-file=.env src/simulator.ts",
     "evaluator": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=TimeoutNegativeWarning --env-file=.env src/evaluator.ts",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=TimeoutNegativeWarning --test \"src/**/*.test.ts\""
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=TimeoutNegativeWarning --test \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "ioredis": "^5.4.1",
