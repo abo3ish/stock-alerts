@@ -55,6 +55,8 @@
   h1 { margin: 0; font-size: clamp(26px, 4vw, 38px); line-height: 1.15; letter-spacing: -0.01em; text-wrap: balance; }
   .tagline { margin: 0; color: var(--muted); max-width: 62ch; }
   .tagline a { color: var(--write); font-weight: 600; }
+  .repo { margin: 0; font-size: 13.5px; color: var(--muted); }
+  .repo a { color: var(--write); font-weight: 600; font-family: var(--font-mono); font-size: 13px; }
   .stack { display: flex; flex-wrap: wrap; gap: 6px; direction: ltr; justify-content: flex-end; }
   .stack span { font-family: var(--font-mono); font-size: 12px; background: var(--chip); color: var(--muted); padding: 2px 8px; border-radius: 4px; }
 
@@ -204,6 +206,7 @@
     <div class="stack"><span>Laravel 13</span><span>Node 23</span><span>Redpanda (Kafka API)</span><span>Redis 7</span><span>PostgreSQL 17</span></div>
     <h1>Stock Alert Pipeline</h1>
     <p class="tagline">إيه اللي بيحصل جوه السيستم خطوة بخطوة: من لحظة ما المستخدم يعمل تنبيه، لحد ما السعر يوصل والتنبيه يتنفذ. اختار سيناريو، ودوس تشغيل أو امشي خطوة خطوة. وتحت، <a href="#decisions">القرارات وليه</a>.</p>
+    <p class="repo"><a href="https://github.com/abo3ish/stock-alerts" target="_blank" rel="noopener" dir="ltr">github.com/abo3ish/stock-alerts</a> · الكود كامل، والـ README بيشرح إزاي تشغّله.</p>
   </header>
 
   <div class="controls">
